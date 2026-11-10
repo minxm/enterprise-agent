@@ -1,10 +1,12 @@
 package com.example.enterprise.config;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import java.time.Duration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.client.RestClient;
 
 @Configuration
@@ -26,6 +28,14 @@ public class RestClientConfig {
         return RestClient.builder()
                 .baseUrl(trimTrailingSlash(baseUrl))
                 .requestFactory(requestFactory)
+                .messageConverters(converters -> {
+                    for (var converter : converters) {
+                        if (converter instanceof MappingJackson2HttpMessageConverter jackson) {
+                            jackson.getObjectMapper()
+                                    .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+                        }
+                    }
+                })
                 .build();
     }
 

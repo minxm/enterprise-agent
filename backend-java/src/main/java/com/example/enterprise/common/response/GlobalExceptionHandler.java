@@ -5,8 +5,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -16,15 +19,28 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AgentServiceException.class)
     public ResponseEntity<ApiResponse<Void>> handleAgentService(AgentServiceException exception) {
         log.warn("Agent dependency call failed: {}", exception.getMessage());
-        HttpStatus status = exception.getStatus();
-        return ResponseEntity.status(status)
-                .body(ApiResponse.failure(status.value(), exception.getMessage()));
+        return error(exception.getStatus(), exception.getMessage());
+    }
+
+    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+    public ResponseEntity<ApiResponse<Void>> handleInvalidRequest(Exception exception) {
+        log.warn("Rejected invalid request: {}", exception.getClass().getSimpleName());
+        return error(HttpStatus.BAD_REQUEST, "请求参数不合法");
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMissing(NoResourceFoundException exception) {
+        log.warn("No matching resource");
+        return error(HttpStatus.NOT_FOUND, "资源不存在");
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception exception) {
         log.error("Unhandled request failure", exception);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.failure(HttpStatus.INTERNAL_SERVER_ERROR.value(), "服务内部错误"));
+        return error(HttpStatus.INTERNAL_SERVER_ERROR, "服务内部错误");
+    }
+
+    private ResponseEntity<ApiResponse<Void>> error(HttpStatus status, String message) {
+        return ResponseEntity.status(status).body(ApiResponse.failure(status.value(), message));
     }
 }

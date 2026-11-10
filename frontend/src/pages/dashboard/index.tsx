@@ -126,12 +126,16 @@ function describeAgent(query: UseQueryResult<{ status: string; service: string }
 
 function failureView(error: unknown): StatusView {
   if (error instanceof RequestError && error.status === undefined) {
-    return { label: '连接失败', tone: 'error', detail: error.message };
+    return { label: '连接失败', tone: 'error', detail: withRequestId(error.message, error.requestId) };
   }
   if (error instanceof RequestError) {
-    return { label: '异常', tone: 'error', detail: error.message };
+    return { label: '异常', tone: 'error', detail: withRequestId(error.message, error.requestId) };
   }
   return { label: '异常', tone: 'error', detail: '检测失败' };
+}
+
+function withRequestId(message: string, requestId: string | undefined): string {
+  return requestId ? `${message}（Request ID: ${requestId}）` : message;
 }
 
 function isConnectionFailure(error: unknown): boolean {

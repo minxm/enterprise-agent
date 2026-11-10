@@ -165,6 +165,8 @@ Java 成功时返回：
 
 Python 不可用时 Java 进程继续运行。连接失败返回 HTTP 503，读超时返回 HTTP 504，Python 返回非 2xx 或响应无法解析时返回 HTTP 502。响应体仍是 `ApiResponse`，不包含 Java 堆栈。
 
+同一次调用使用同一个 `X-Request-ID`。Java 校验请求头：只接受不超过 128 位的字母、数字、连字符和下划线，否则生成新的 ID。Java 把该 ID 传给 Python，并写入自己的响应头和 `ApiResponse.requestId`。Python 沿用这个 ID，写入响应头；健康检查 JSON 额外带 `requestId`，原有 `status` 和 `service` 不变。错误响应同样返回该 ID，不返回堆栈。
+
 地址来自 `agent.service.base-url` 和 `agent.service.health-path`，可用环境变量 `AGENT_SERVICE_BASE_URL`、`AGENT_SERVICE_HEALTH_PATH` 覆盖。
 
 ### 与原契约的差异

@@ -1,5 +1,6 @@
 package com.example.enterprise.integration.agent;
 
+import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
 import java.net.ConnectException;
 import java.net.NoRouteToHostException;
@@ -25,8 +26,10 @@ public class AgentClient {
 
     public AgentHealthResponse health() {
         try {
+            String requestId = RequestIds.current().orElseGet(RequestIds::newId);
             return agentRestClient.get()
                     .uri(properties.getHealthPath())
+                    .header(RequestIds.HEADER, requestId)
                     .exchange((request, response) -> {
                         if (!response.getStatusCode().is2xxSuccessful()) {
                             throw new AgentServiceException(

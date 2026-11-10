@@ -3,6 +3,7 @@ package com.example.enterprise.integration.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
 import com.example.enterprise.config.RestClientConfig;
 import java.time.Duration;
@@ -12,6 +13,7 @@ import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
 
@@ -81,6 +83,33 @@ class AgentClientTest {
                 .hasMessage("Agent 服务返回异常状态")
                 .extracting(exception -> ((AgentServiceException) exception).getStatus())
                 .isEqualTo(HttpStatus.BAD_GATEWAY);
+    }
+
+    @Test
+    void forwardsTheCurrentRequestIdWithoutGeneratingAnother() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"status\":\"ok\",\"service\":\"agent-runtime\",\"requestId\":\"from-python\"}"));
+        MDC.put(RequestIds.MDC_KEY, "trace-shared");
+        try {
+            client(server.url("/").toString(), Duration.ofSeconds(1), Duration.ofSeconds(1)).health();
+            assertThat(server.takeRequest().getHeader(RequestIds.HEADER)).isEqualTo("trace-shared");
+        } finally {
+            MDC.remove(RequestIds.MDC_KEY);
+        }
+    }
+
+    @Test
+    void generatesASafeRequestIdWhenNoWebContextExists() throws Exception {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"status\":\"ok\",\"service\":\"agent-runtime\"}"));
+        MDC.clear();
+
+        client(server.url("/").toString(), Duration.ofSeconds(1), Duration.ofSeconds(1)).health();
+
+        String requestId = server.takeRequest().getHeader(RequestIds.HEADER);
+        assertThat(requestId).matches("[A-Za-z0-9_-]{1,128}");
     }
 
     private AgentClient client(String baseUrl, Duration connectTimeout, Duration readTimeout) {
