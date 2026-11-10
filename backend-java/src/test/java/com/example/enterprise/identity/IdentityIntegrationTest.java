@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.UUID;
@@ -60,6 +61,7 @@ class IdentityIntegrationTest {
     @AfterEach
     void clearTenant() {
         TenantContext.clear();
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -185,7 +187,9 @@ class IdentityIntegrationTest {
         assertTrue(hash.startsWith("$2"));
         assertTrue(passwords.matches(RAW_PASSWORD, hash));
 
-        String body = mockMvc.perform(get("/api/v1/identity/users"))
+        String token = login("acme-secret", "ada", RAW_PASSWORD);
+        String body = mockMvc.perform(get("/api/v1/identity/users")
+                        .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].loginName").value("ada"))
                 .andReturn()
@@ -200,15 +204,42 @@ class IdentityIntegrationTest {
     void requestTenantIdIsNotTrusted() throws Exception {
         TenantView tenant = identity.createTenant("acme-context", "Acme");
         mockMvc.perform(get("/api/v1/identity/tenant").param("tenantId", tenant.id().toString()))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("租户上下文未建立"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("未认证"));
+        assertThrows(IdentityException.class, TenantContext::require);
 
         TenantContext.set(tenant.id());
+        identity.createUser("ada", RAW_PASSWORD, "Ada");
+        String token = login("acme-context", "ada", RAW_PASSWORD);
+        mockMvc.perform(get("/api/v1/identity/tenant")
+                        .header("Authorization", "Bearer " + token)
+                        .header("X-Tenant-Id", UUID.randomUUID().toString())
+                        .param("tenantId", UUID.randomUUID().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(tenant.id().toString()));
+        assertThrows(IdentityException.class, TenantContext::require);
+
         mockMvc.perform(post("/api/v1/identity/user-roles/check")
+                        .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"userId\":\"" + UUID.randomUUID() + "\",\"roleId\":\"" + UUID.randomUUID() + "\"}"))
+                        .content("{\"userId\":\"" + UUID.randomUUID()
+                                + "\",\"roleId\":\"" + UUID.randomUUID()
+                                + "\",\"tenantId\":\"" + UUID.randomUUID() + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.valid").value(false));
+    }
+
+    private String login(String tenantCode, String username, String password) throws Exception {
+        String body = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tenantCode\":\"" + tenantCode
+                                + "\",\"username\":\"" + username
+                                + "\",\"password\":\"" + password + "\"}"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return com.jayway.jsonpath.JsonPath.read(body, "$.data.token");
     }
 
     @Test

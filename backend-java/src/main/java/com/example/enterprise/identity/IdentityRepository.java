@@ -107,6 +107,14 @@ public class IdentityRepository {
                 """, status, id);
     }
 
+    public void updateUserStatus(UUID id, String status) {
+        jdbc.update("""
+                update business.app_user
+                set status = ?, updated_at = now()
+                where id = ?
+                """, status, id);
+    }
+
     public Optional<RoleView> findRole(UUID roleId) {
         List<RoleView> rows = jdbc.query("""
                 select id, code, name

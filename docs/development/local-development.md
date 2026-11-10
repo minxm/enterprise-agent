@@ -42,6 +42,8 @@ Get-Content .env | ForEach-Object {
 mvn spring-boot:run "-Dspring-boot.run.profiles=dev"
 ```
 
+`dev` profile 启动前，`.env` 里的 `JWT_SECRET` 必须是至少 32 个字符的签名密钥。不要把真实密钥写进源码或提交到 Git。
+
 Python 从 `agent-python/.env` 或仓库根目录 `.env` 读取同名变量。只有 `ENTERPRISE_INFRA_ENABLED=true` 时，进程启动才会打开连接池。
 
 ## 启动前端

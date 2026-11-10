@@ -1,3 +1,9 @@
+enterprise:
+  auth:
+    secret: ${JWT_SECRET}
+    issuer: ${JWT_ISSUER:enterprise-agent}
+    ttl: ${JWT_TTL:2h}
+
 spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.enterprise.common.request.RequestIdFilter;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.common.response.GlobalExceptionHandler;
+import com.example.enterprise.config.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -19,7 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(AgentIntegrationController.class)
-@Import({GlobalExceptionHandler.class, RequestIdFilter.class})
+@Import({GlobalExceptionHandler.class, RequestIdFilter.class, SecurityConfig.class})
 class AgentIntegrationControllerTest {
 
     @Autowired

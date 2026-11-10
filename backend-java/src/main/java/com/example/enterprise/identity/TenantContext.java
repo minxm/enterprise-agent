@@ -1,9 +1,16 @@
 package com.example.enterprise.identity;
 
+import com.example.enterprise.auth.AuthenticatedUser;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 服务端可信租户。只允许认证过滤器或测试夹具写入，不从请求参数填充。
+ * 可信租户来自已验证的 Authentication。测试夹具才可以直接 set。
+ * 不读取 URL、Body 或普通请求头里的 tenantId。
  */
 public final class TenantContext {
 
@@ -14,17 +21,21 @@ public final class TenantContext {
 
     public static void set(UUID tenantId) {
         if (tenantId == null) {
-            throw new IdentityException(org.springframework.http.HttpStatus.BAD_REQUEST, "租户上下文未建立");
+            throw new IdentityException(HttpStatus.BAD_REQUEST, "租户上下文未建立");
         }
         CURRENT.set(tenantId);
     }
 
-    public static UUID require() {
-        UUID tenantId = CURRENT.get();
-        if (tenantId == null) {
-            throw new IdentityException(org.springframework.http.HttpStatus.FORBIDDEN, "租户上下文未建立");
+    public static Optional<UUID> getTenantId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof AuthenticatedUser user) {
+            return Optional.of(user.tenantId());
         }
-        return tenantId;
+        return Optional.ofNullable(CURRENT.get());
+    }
+
+    public static UUID require() {
+        return getTenantId().orElseThrow(() -> new IdentityException(HttpStatus.FORBIDDEN, "租户上下文未建立"));
     }
 
     public static void clear() {

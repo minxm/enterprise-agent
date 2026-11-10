@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.example.enterprise.common.response.GlobalExceptionHandler;
+import com.example.enterprise.config.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(ValidationProbeController.class)
-@Import({RequestIdFilter.class, GlobalExceptionHandler.class})
+@Import({RequestIdFilter.class, GlobalExceptionHandler.class, SecurityConfig.class})
 class RequestIdFilterTest {
 
     @Autowired
