@@ -1,6 +1,6 @@
 # 本地开发
 
-当前只记录 Java 调用 Python 健康检查的启动方式。三个服务各自使用自己的依赖，不共用虚拟环境。
+三个服务各自使用自己的依赖，不共用虚拟环境。前端只请求 Java，不请求 Python。
 
 ## 环境
 
@@ -16,6 +16,18 @@ Python Agent 使用 `agent-python/.venv`，解释器来自 `D:\Programs\minicond
 $env:JAVA_HOME = "D:\Program Files\Java\jdk-25.0.4.1+1"
 $env:Path = "$env:JAVA_HOME\bin;D:\Programs\maven\apache-maven-3.9.11\bin;$env:Path"
 ```
+
+## 启动前端
+
+Node.js 24 可用于当前 Vite 6（要求 Node 18、20 或 22 及以上）。依赖只安装在 `frontend/node_modules`。
+
+```powershell
+cd D:\enterprise-agent\frontend
+npm install
+npm run dev
+```
+
+开发服务器是 `http://127.0.0.1:5173`。开发环境请求基地址是 `http://localhost:8080`，生产构建使用 `/api`。Java 目前没有 CORS，浏览器从 5173 直接调用 8080 会被浏览器拦截。今天的页面不发起真实业务请求。
 
 ## 启动 Python
 
