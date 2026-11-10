@@ -1,0 +1,6 @@
+agent:
+  service:
+    base-url: http://localhost:8000
+    health-path: /api/v1/health
+    connect-timeout: 3s
+    read-timeout: 5s

@@ -131,3 +131,44 @@ data: {"run_id":"run-001","status":"completed"}
 6. Python 根据审批结果恢复或终止工作流。
 
 注意：Agent 的暂停状态由 LangGraph 管理，正式业务审批状态由 Java 管理，两者不能混为一谈。
+
+## 健康检查的当前实现
+
+浏览器不直接访问 Python。Java 增加了一个只读探测接口，用来确认 Python Agent 进程是否可用：
+
+| 调用方 | 被调用方 | 接口 | 用途 |
+| --- | --- | --- | --- |
+| 浏览器 | Java | `GET /api/v1/integration/agent/health` | 查询 Python 健康状态，响应为统一 `ApiResponse` |
+| Java | Python | `GET {agent.service.base-url}/api/v1/health` | 复用 Python 已实现的健康检查。默认地址是 `http://localhost:8000/api/v1/health` |
+
+Python 当前响应：
+
+```json
+{
+  "status": "ok",
+  "service": "agent-runtime"
+}
+```
+
+Java 成功时返回：
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "data": {
+    "status": "ok",
+    "service": "agent-runtime"
+  }
+}
+```
+
+Python 不可用时 Java 进程继续运行。连接失败返回 HTTP 503，读超时返回 HTTP 504，Python 返回非 2xx 或响应无法解析时返回 HTTP 502。响应体仍是 `ApiResponse`，不包含 Java 堆栈。
+
+地址来自 `agent.service.base-url` 和 `agent.service.health-path`，可用环境变量 `AGENT_SERVICE_BASE_URL`、`AGENT_SERVICE_HEALTH_PATH` 覆盖。
+
+### 与原契约的差异
+
+- 上面的任务接口仍然是 `POST /api/v1/agent/runs/stream` 和 `POST /internal/v1/agent/runs/stream`。本次没有实现任务流。
+- Python 已实现并通过测试的健康检查是 `GET /api/v1/health`，不是 `/internal/v1` 前缀。Java 直接调用这条现有路径，没有改 Python。
+- 这次健康检查是只读探测，还没有携带服务间共享密钥，也没有引入 Spring Security。后续业务内部接口仍按本文的安全要求补上服务身份认证。
