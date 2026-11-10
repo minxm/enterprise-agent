@@ -108,6 +108,7 @@ erDiagram
 | 列 | 约束 |
 | --- | --- |
 | `id` | 主键 |
+| `code` | 非空，全局唯一 |
 | `name` | 非空 |
 | `status` | `active` 或 `disabled` |
 | `created_at`、`updated_at` | 非空 |
