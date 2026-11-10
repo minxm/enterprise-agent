@@ -108,10 +108,10 @@ PDF、DOCX、纯文本的解析库待确认，实现落在已有的 `app/rag/loa
 
 | 技术 | 第一阶段用法 |
 | --- | --- |
-| PostgreSQL + pgvector | 业务数据与向量检索放在同一实例，避免再运维一套向量库。建议主版本 16，镜像 tag 待确认 |
+| PostgreSQL + pgvector | 业务数据与向量检索放在同一实例，避免再运维一套向量库。镜像 `pgvector/pgvector:0.8.7-pg16` |
 | Redis | 只做两件事：写接口的幂等响应缓存；Java 调用 Agent 期间的会话锁。Redis 里的数据都可以丢，丢了由数据库唯一约束兜底 |
 | MinIO | 保存原文件。数据库只存对象键和校验信息 |
-| Docker Compose | 三个服务都能独立启动之后，再作为本地与单机演示的编排方式。当前不提交 Compose 文件 |
+| Docker Compose | `deploy/docker-compose.yml` 目前只编排 `postgres` 和 `redis`。frontend、backend-java、agent-python 和 MinIO 仍各自启动 |
 
 幂等缓存保留 24 小时。过期后的重试仍由数据库唯一约束保证不重复写入；调用方可能收不到与第一次完全相同的快捷响应，但不会产生第二份审批任务或第二份草稿。
 
@@ -337,7 +337,7 @@ Compose 项目名 `enterprise-agent`，服务名固定为：
 - `redis`
 - `minio`
 
-Compose 文件尚未提交。三个服务先在本机独立启动。之后添加 Compose 时，`agent-python` 不映射宿主机端口；开发用的数据库、Redis、MinIO 可以映射到本机，演示环境只把 frontend 的 HTTP 端口暴露到宿主机。具体端口号待确认。MinIO 控制台不对公网开放。
+`deploy/docker-compose.yml` 当前只包含 `postgres` 和 `redis`。三个应用仍在本机独立启动。之后把应用放进 Compose 时，`agent-python` 不映射宿主机端口；演示环境只把 frontend 的 HTTP 端口暴露到宿主机。本地数据库端口是 `127.0.0.1:5432`，Redis 端口是 `127.0.0.1:6379`。MinIO 控制台不对公网开放。
 
 PostgreSQL 使用 pgvector 镜像。实现数据库时，`database/postgres/init` 只创建扩展、schema 和角色，不建业务表。
 

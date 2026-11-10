@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+    username: business_app
+    password: ${BUSINESS_APP_PASSWORD}
+  flyway:
+    user: business_migrator
+    password: ${BUSINESS_MIGRATOR_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      timeout: 2s

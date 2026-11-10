@@ -22,7 +22,7 @@
 | `business` | `business_migrator` | `business_app` | 租户、身份、合同、文件登记、会话消息、审批、业务审计 |
 | `agent` | `agent_migrator` | `agent_app` | 知识切片、长期记忆、运行记录、LangGraph checkpoint |
 
-扩展 `vector` 装在数据库级，供 `agent` 使用。建议 PostgreSQL 16，镜像 tag 待确认。
+扩展 `vector` 装在数据库级，供 `agent` 使用。镜像是 `pgvector/pgvector:0.8.7-pg16`。
 
 不使用 `public` 存放应用表。Java 连接的 `search_path` 只有 `business`。Python 连接的 `search_path` 只有 `agent`。
 
@@ -587,7 +587,7 @@ Redis 键不替代上表：
 | 记忆按用户隔离或向量化 | 表结构只有租户级文本 |
 | 条款库物理删除 | 第一阶段可以只停用，待确认 |
 | 审计与运行记录保留期限 | 未定期清理 |
-| PostgreSQL 小版本与 pgvector 镜像 tag | 建议主版本 16 |
+| PostgreSQL 小版本与 pgvector 镜像 tag | 已使用 `pgvector/pgvector:0.8.7-pg16` |
 
 ## 12. 与其他文档的对齐
 
