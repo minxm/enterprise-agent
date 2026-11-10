@@ -2,7 +2,7 @@
 
 本文定义第一阶段 PostgreSQL 的 schema、表、隔离和迁移。进程职责见 [系统架构](../architecture/system-architecture.md) 与 [模块边界](../architecture/module-boundaries.md)。
 
-当前 `database/postgres/init` 与种子数据仍是占位。落地时按本文替换，不在初始化脚本里创建业务表。
+数据库脚本在实现到迁移时再提交。`database/postgres/init` 只创建扩展、schema 和角色，不建业务表，也不提前提交空脚本。
 
 ## 1. 不变式
 

@@ -23,14 +23,14 @@
 
 ## 3. 前端边界
 
-现有目录：
+前端依赖只放在 `frontend/package.json`，使用该目录自己的 `node_modules`。页面、接口和状态目录在实现对应功能时再创建。
 
-| 路径 | 边界 |
+| 实现时的位置 | 边界 |
 | --- | --- |
 | `frontend/src/api` | 只封装 backend-java 的 `/api/v1`。不写 agent-python 的基地址 |
-| `frontend/src/stores/authStore.ts` | 内存中的当前用户和访问令牌。不把令牌写入 `localStorage` 或 `sessionStorage` |
-| `frontend/src/router` | `AuthGuard` 只检查是否持有登录态。无令牌则去登录页 |
-| `frontend/src/hooks/useSSE.ts` | 连接 Java 的会话事件接口 |
+| 登录状态 | 当前用户和访问令牌只放内存。不把令牌写入 `localStorage` 或 `sessionStorage` |
+| 路由守卫 | 只检查是否持有登录态。无令牌则去登录页 |
+| 会话事件 | 连接 Java 的会话事件接口 |
 
 第一阶段页面：登录、合同列表、合同详情与审核、待办审批、条款库、用户与角色。后两项仅 `tenant_admin` 的菜单展示；接口仍由 Java 鉴权。
 
@@ -40,7 +40,7 @@
 
 ## 4. Java 边界
 
-包根路径保持 `com.example.enterprise`。已有 `config` 与 `security` 继续承担基础设施和认证。业务按下面的逻辑模块划分，模块之间通过应用服务调用，不跨模块直接改表。
+Java 依赖只放在 `backend-java/pom.xml`。包根路径为 `com.example.enterprise`。下表是模块边界，写到哪个模块再建立哪个包，模块之间通过应用服务调用，不跨模块直接改表。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -78,6 +78,8 @@ Flyway 目录使用 `backend-java/src/main/resources/db/migration`，连接用�
 
 ## 5. Python 边界
 
+Python 依赖只放在 `agent-python/pyproject.toml`，虚拟环境只属于这个目录。下表是模块边界，实现到哪一项再建立对应目录。
+
 | 路径 | 边界 |
 | --- | --- |
 | `app/api/v1` | 对 Java 暴露的内部接口，不做用户登录 |
@@ -91,7 +93,7 @@ Flyway 目录使用 `backend-java/src/main/resources/db/migration`，连接用�
 | `app/models` | OpenAI 兼容聊天与嵌入。供应商待确认 |
 | `app/observability` | 结构化日志和运行异常。LangSmith 默认不启用 |
 
-`app/graphs/workflows/payment_review.py` 与 `knowledge_qa.py` 不注册。`contract_query.py` 与 `approval_workflow.py` 若在实现中保留，只能作为合同审核图的内部函数，不能再对 Java 提供第二条入口。
+付款审核和通用知识问答不建目录，也不注册为运行入口。合同查询和审批只作为合同审核图的内部步骤，不向 Java 提供第二条入口。
 
 Python 运行时使用 `agent_app`，迁移和 `PostgresSaver.setup()` 使用 `agent_migrator`。checkpoint 建在 `agent` schema。应用代码不手写 checkpoint 表的 DDL，也不在业务查询里连接这些表。
 

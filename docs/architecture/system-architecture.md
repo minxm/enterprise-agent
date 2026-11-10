@@ -14,7 +14,7 @@
 
 第一阶段不做这些能力，也不为它们预留运行中的组件：
 
-- 付款审核、通用知识问答等其他业务图（仓库中的 `payment_review`、`knowledge_qa` 不注册为运行入口）
+- 付款审核、通用知识问答等其他业务图。这些目录现在不创建
 - 多级审批、会签、转办
 - 合同终态之后的再次审核
 - 消息队列、独立向量数据库、Kubernetes、服务网格
@@ -40,7 +40,7 @@ Java 是业务事实的权威。合同状态、审批结论、用户可见对话
 
 LangGraph 的 checkpoint 只保存这一次图执行的短期状态。长期记忆是另一类数据，只保存已经确认、可复用的审核口径，不能代替合同或审批记录。
 
-第一阶段部署在单机 Docker Compose 上。不设计多副本下的分布式事务。两个应用进程可以独立启动；对方不可用时，调用方返回明确错误。
+目标部署是单机 Docker Compose，不设计多副本下的分布式事务。在此之前，frontend、backend-java、agent-python 先各自安装依赖并独立启动。对方不可用时，调用方返回明确错误。仓库在三个服务都能独立运行之前不提交 Compose 文件。
 
 ### 2.1 不变式
 
@@ -111,7 +111,7 @@ PDF、DOCX、纯文本的解析库待确认，实现落在已有的 `app/rag/loa
 | PostgreSQL + pgvector | 业务数据与向量检索放在同一实例，避免再运维一套向量库。建议主版本 16，镜像 tag 待确认 |
 | Redis | 只做两件事：写接口的幂等响应缓存；Java 调用 Agent 期间的会话锁。Redis 里的数据都可以丢，丢了由数据库唯一约束兜底 |
 | MinIO | 保存原文件。数据库只存对象键和校验信息 |
-| Docker Compose | 本地与单机演示的唯一编排方式 |
+| Docker Compose | 三个服务都能独立启动之后，再作为本地与单机演示的编排方式。当前不提交 Compose 文件 |
 
 幂等缓存保留 24 小时。过期后的重试仍由数据库唯一约束保证不重复写入；调用方可能收不到与第一次完全相同的快捷响应，但不会产生第二份审批任务或第二份草稿。
 
@@ -298,7 +298,7 @@ Python 不解析用户 JWT。它只接受带内部令牌的调用，并把用户
 
 ## 6. Agent 工作流
 
-第一阶段只注册一条图：合同审核。节点使用已有目录 `agent-python/app/graphs/nodes`。
+第一阶段只注册一条图：合同审核。实现该图时再创建对应节点，不提前建空目录。
 
 | 顺序 | 节点 | 行为 |
 | --- | --- | --- |
@@ -337,9 +337,9 @@ Compose 项目名 `enterprise-agent`，服务名固定为：
 - `redis`
 - `minio`
 
-`agent-python` 不映射宿主机端口。`postgres`、`redis`、`minio` 在 `docker-compose.dev.yml` 中映射到本机，便于开发；`docker-compose.yml` 只把 frontend 的 HTTP 端口暴露到宿主机。具体端口号待确认。MinIO 控制台不对公网开放。
+Compose 文件尚未提交。三个服务先在本机独立启动。之后添加 Compose 时，`agent-python` 不映射宿主机端口；开发用的数据库、Redis、MinIO 可以映射到本机，演示环境只把 frontend 的 HTTP 端口暴露到宿主机。具体端口号待确认。MinIO 控制台不对公网开放。
 
-PostgreSQL 使用 pgvector 镜像。初始化脚本 `database/postgres/init` 只创建扩展、schema 和角色，不建业务表。
+PostgreSQL 使用 pgvector 镜像。实现数据库时，`database/postgres/init` 只创建扩展、schema 和角色，不建业务表。
 
 运行时账号：
 

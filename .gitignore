@@ -1,2 +1,74 @@
-﻿# TODO: 在对应实施阶段补充实现。
+﻿# ==============================
+# Environment & Secrets
+# ==============================
+# 真实配置只留在本机。.env、.env.local、.env.development、.env.production 都不提交。
+.env
+.env.*
+!.env.example
+*.pem
+*.key
 
+# ==============================
+# Frontend - Node.js
+# ==============================
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ==============================
+# Java - Spring Boot
+# ==============================
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# IDE
+.idea/
+*.iml
+.settings/
+.classpath
+.project
+
+# ==============================
+# Python
+# ==============================
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist-python/
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/
+
+# ==============================
+# Docker & Runtime Data
+# ==============================
+runtime-data/
+postgres-data/
+redis-data/
+minio-data/
+
+# ==============================
+# OS
+# ==============================
+.DS_Store
+Thumbs.db
+Desktop.ini
