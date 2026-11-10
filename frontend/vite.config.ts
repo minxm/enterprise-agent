@@ -1,14 +1,19 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// 开发请求直接使用 VITE_API_BASE_URL。Java 目前没有 CORS，
-// 这里不另挂 /api 代理，避免和绝对地址同时生效。
+const javaTarget = 'http://127.0.0.1:8080';
+
+// 浏览器只访问开发服务器。/api 与 /actuator 转发到 Java，不配置 Python 代理，也不启用 CORS。
 export default defineConfig({
   plugins: [react()],
   server: {
     host: '127.0.0.1',
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/api': { target: javaTarget, changeOrigin: true },
+      '/actuator': { target: javaTarget, changeOrigin: true },
+    },
   },
   preview: {
     host: '127.0.0.1',
