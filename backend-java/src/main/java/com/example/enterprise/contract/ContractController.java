@@ -4,7 +4,9 @@ import com.example.enterprise.auth.AuthenticatedUser;
 import com.example.enterprise.common.response.ApiResponse;
 import com.example.enterprise.contract.ContractViews.ContractFileView;
 import com.example.enterprise.contract.ContractViews.ContractPage;
+import com.example.enterprise.contract.ContractViews.ContractVersionView;
 import com.example.enterprise.contract.ContractViews.ContractView;
+import com.example.enterprise.contract.ContractViews.CreateVersion;
 import com.example.enterprise.contract.ContractViews.LinkFile;
 import com.example.enterprise.contract.ContractViews.StatusChange;
 import com.example.enterprise.contract.ContractViews.WriteContract;
@@ -72,6 +74,28 @@ public class ContractController {
     @PostMapping("/{contractId}/status")
     public ApiResponse<ContractView> changeStatus(@PathVariable UUID contractId, @RequestBody StatusChange request) {
         return ApiResponse.success(contracts.changeStatus(currentUser(), contractId, request == null ? null : request.status()));
+    }
+
+    @PostMapping("/{contractId}/versions")
+    public ApiResponse<ContractVersionView> createVersion(
+            @PathVariable UUID contractId, @RequestBody CreateVersion request) {
+        return ApiResponse.success(contracts.createVersion(currentUser(), contractId, request));
+    }
+
+    @GetMapping("/{contractId}/versions/current")
+    public ApiResponse<ContractVersionView> currentVersion(@PathVariable UUID contractId) {
+        return ApiResponse.success(contracts.currentVersion(currentUser(), contractId));
+    }
+
+    @GetMapping("/{contractId}/versions")
+    public ApiResponse<List<ContractVersionView>> listVersions(@PathVariable UUID contractId) {
+        return ApiResponse.success(contracts.listVersions(currentUser(), contractId));
+    }
+
+    @GetMapping("/{contractId}/versions/{versionId}")
+    public ApiResponse<ContractVersionView> getVersion(
+            @PathVariable UUID contractId, @PathVariable UUID versionId) {
+        return ApiResponse.success(contracts.getVersion(currentUser(), contractId, versionId));
     }
 
     @PostMapping("/{contractId}/files")

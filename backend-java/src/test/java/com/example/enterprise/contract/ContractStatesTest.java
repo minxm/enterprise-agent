@@ -24,6 +24,13 @@ class ContractStatesTest {
         assertFalse(ContractStates.canEdit("pending_review"));
         assertFalse(ContractStates.canEdit("effective"));
         assertFalse(ContractStates.canEdit("terminated"));
+        assertTrue(ContractStates.canCreateVersion("draft"));
+        assertTrue(ContractStates.canCreateVersion("rejected"));
+        assertFalse(ContractStates.canCreateVersion("pending_review"));
+        assertFalse(ContractStates.canCreateVersion("approved"));
+        assertFalse(ContractStates.canCreateVersion("effective"));
+        assertFalse(ContractStates.canCreateVersion("expired"));
+        assertFalse(ContractStates.canCreateVersion("terminated"));
     }
 
     @Test

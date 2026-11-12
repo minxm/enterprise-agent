@@ -1,6 +1,7 @@
 package com.example.enterprise.contract;
 
 import com.example.enterprise.contract.ContractViews.ContractFileView;
+import com.example.enterprise.contract.ContractViews.ContractVersionView;
 import com.example.enterprise.contract.ContractViews.ContractView;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -96,6 +97,73 @@ public class ContractRepository {
                 insert into business.contract_file (id, tenant_id, contract_id, file_id, file_role, created_by)
                 values (?, ?, ?, ?, ?, ?)
                 """, id, tenantId, contractId, fileId, fileRole, createdBy));
+    }
+
+    public boolean lockContract(UUID tenantId, UUID contractId) {
+        return !jdbc.query("""
+                select id from business.contract
+                where id = ? and tenant_id = ?
+                for update
+                """, (rs, rowNum) -> rs.getObject("id", UUID.class), contractId, tenantId).isEmpty();
+    }
+
+    public int nextVersionNo(UUID tenantId, UUID contractId) {
+        Integer max = jdbc.queryForObject("""
+                select coalesce(max(version_no), 0)
+                from business.contract_version
+                where tenant_id = ? and contract_id = ?
+                """, Integer.class, tenantId, contractId);
+        return (max == null ? 0 : max) + 1;
+    }
+
+    public void clearCurrentVersion(UUID tenantId, UUID contractId) {
+        jdbc.update("""
+                update business.contract_version
+                set is_current = false
+                where tenant_id = ? and contract_id = ? and is_current
+                """, tenantId, contractId);
+    }
+
+    public void insertVersion(
+            UUID id, UUID tenantId, UUID contractId, int versionNo, String versionLabel,
+            UUID fileId, String changeSummary, UUID createdBy) {
+        write(() -> jdbc.update("""
+                insert into business.contract_version (
+                    id, tenant_id, contract_id, version_no, version_label, file_id,
+                    change_summary, is_current, created_by)
+                values (?, ?, ?, ?, ?, ?, ?, true, ?)
+                """, id, tenantId, contractId, versionNo, versionLabel, fileId, changeSummary, createdBy));
+    }
+
+    public Optional<ContractVersionView> findCurrentVersion(UUID tenantId, UUID contractId) {
+        return queryVersions("""
+                select %s
+                from business.contract_version version
+                join business.stored_file file
+                  on file.id = version.file_id and file.tenant_id = version.tenant_id
+                where version.tenant_id = ? and version.contract_id = ? and version.is_current
+                """.formatted(versionColumns()), tenantId, contractId).stream().findFirst();
+    }
+
+    public Optional<ContractVersionView> findVersion(UUID tenantId, UUID contractId, UUID versionId) {
+        return queryVersions("""
+                select %s
+                from business.contract_version version
+                join business.stored_file file
+                  on file.id = version.file_id and file.tenant_id = version.tenant_id
+                where version.tenant_id = ? and version.contract_id = ? and version.id = ?
+                """.formatted(versionColumns()), tenantId, contractId, versionId).stream().findFirst();
+    }
+
+    public List<ContractVersionView> listVersions(UUID tenantId, UUID contractId) {
+        return queryVersions("""
+                select %s
+                from business.contract_version version
+                join business.stored_file file
+                  on file.id = version.file_id and file.tenant_id = version.tenant_id
+                where version.tenant_id = ? and version.contract_id = ?
+                order by version.version_no desc
+                """.formatted(versionColumns()), tenantId, contractId);
     }
 
     public boolean unlinkFile(UUID tenantId, UUID contractId, UUID fileId) {
@@ -220,7 +288,40 @@ public class ContractRepository {
         if (message.contains("contract_file_file_fk") || message.contains("contract_file_contract_fk")) {
             return new ContractException(HttpStatus.NOT_FOUND, "合同或文件不存在");
         }
+        if (message.contains("contract_version_no_unique") || message.contains("contract_version_current_unique")) {
+            return new ContractException(HttpStatus.CONFLICT, "版本冲突");
+        }
+        if (message.contains("contract_version_file_fk") || message.contains("contract_version_contract_fk")) {
+            return new ContractException(HttpStatus.NOT_FOUND, "合同或文件不存在");
+        }
         return new ContractException(HttpStatus.CONFLICT, "数据约束冲突");
+    }
+
+    private List<ContractVersionView> queryVersions(String sql, Object... args) {
+        return jdbc.query(sql, (rs, rowNum) -> new ContractVersionView(
+                rs.getObject("id", UUID.class),
+                rs.getInt("version_no"),
+                rs.getString("version_label"),
+                rs.getObject("file_id", UUID.class),
+                rs.getString("filename"),
+                rs.getString("media_type"),
+                rs.getLong("byte_size"),
+                rs.getString("extension"),
+                rs.getString("checksum_sha256"),
+                rs.getString("status"),
+                rs.getString("change_summary"),
+                rs.getBoolean("is_current"),
+                rs.getObject("created_by", UUID.class),
+                rs.getObject("created_at", OffsetDateTime.class).toInstant()), args);
+    }
+
+    private static String versionColumns() {
+        return """
+                version.id, version.version_no, version.version_label, version.file_id,
+                version.change_summary, version.is_current, version.created_by, version.created_at,
+                file.filename, file.media_type, file.byte_size, file.extension,
+                file.checksum_sha256, file.status
+                """;
     }
 
     public record ContractRow(

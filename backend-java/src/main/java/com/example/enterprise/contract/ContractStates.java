@@ -44,6 +44,10 @@ final class ContractStates {
         return DRAFT.equals(status) || REJECTED.equals(status);
     }
 
+    static boolean canCreateVersion(String status) {
+        return canEdit(status);
+    }
+
     static void requireTransition(String from, String to) {
         if (!known(from) || !known(to) || !NEXT.get(from).contains(to)) {
             throw new ContractException(HttpStatus.CONFLICT,

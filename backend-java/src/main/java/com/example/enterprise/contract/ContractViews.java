@@ -64,4 +64,24 @@ public final class ContractViews {
 
     public record LinkFile(UUID fileId, String fileRole) {
     }
+
+    public record CreateVersion(UUID fileId, String changeSummary) {
+    }
+
+    public record ContractVersionView(
+            UUID versionId,
+            int versionNo,
+            String versionLabel,
+            UUID fileId,
+            String filename,
+            String mediaType,
+            long byteSize,
+            String extension,
+            String checksumSha256,
+            String fileStatus,
+            String changeSummary,
+            boolean current,
+            UUID createdBy,
+            Instant createdAt) {
+    }
 }

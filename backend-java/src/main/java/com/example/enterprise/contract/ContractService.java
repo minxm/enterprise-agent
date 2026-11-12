@@ -5,7 +5,9 @@ import com.example.enterprise.contract.ContractRepository.ContractQuery;
 import com.example.enterprise.contract.ContractRepository.ContractRow;
 import com.example.enterprise.contract.ContractViews.ContractFileView;
 import com.example.enterprise.contract.ContractViews.ContractPage;
+import com.example.enterprise.contract.ContractViews.ContractVersionView;
 import com.example.enterprise.contract.ContractViews.ContractView;
+import com.example.enterprise.contract.ContractViews.CreateVersion;
 import com.example.enterprise.contract.ContractViews.LinkFile;
 import com.example.enterprise.contract.ContractViews.WriteContract;
 import com.example.enterprise.file.StoredFileRepository;
@@ -145,6 +147,54 @@ public class ContractService {
     }
 
     @Transactional
+    public ContractVersionView createVersion(AuthenticatedUser user, UUID contractId, CreateVersion request) {
+        UUID tenantId = openTenant(user);
+        if (request == null || request.fileId() == null) {
+            throw new ContractException(HttpStatus.BAD_REQUEST, "请求参数不合法");
+        }
+        String summary = required(request.changeSummary(), 500);
+        if (!contracts.lockContract(tenantId, contractId)) {
+            throw new ContractException(HttpStatus.NOT_FOUND, "合同不存在");
+        }
+        ContractRow current = requireContract(tenantId, contractId);
+        if (!ContractStates.canCreateVersion(current.status())) {
+            throw new ContractException(HttpStatus.CONFLICT, "当前状态不允许创建版本");
+        }
+        files.find(tenantId, request.fileId())
+                .filter(file -> "ready".equals(file.status()))
+                .orElseThrow(() -> new ContractException(HttpStatus.NOT_FOUND, "文件不存在"));
+        contracts.clearCurrentVersion(tenantId, contractId);
+        int versionNo = contracts.nextVersionNo(tenantId, contractId);
+        UUID versionId = UUID.randomUUID();
+        contracts.insertVersion(
+                versionId, tenantId, contractId, versionNo, "V" + versionNo,
+                request.fileId(), summary, user.userId());
+        return requireVersion(tenantId, contractId, versionId);
+    }
+
+    @Transactional
+    public ContractVersionView currentVersion(AuthenticatedUser user, UUID contractId) {
+        UUID tenantId = openTenant(user);
+        requireContract(tenantId, contractId);
+        return contracts.findCurrentVersion(tenantId, contractId)
+                .orElseThrow(() -> new ContractException(HttpStatus.NOT_FOUND, "当前版本不存在"));
+    }
+
+    @Transactional
+    public List<ContractVersionView> listVersions(AuthenticatedUser user, UUID contractId) {
+        UUID tenantId = openTenant(user);
+        requireContract(tenantId, contractId);
+        return contracts.listVersions(tenantId, contractId);
+    }
+
+    @Transactional
+    public ContractVersionView getVersion(AuthenticatedUser user, UUID contractId, UUID versionId) {
+        UUID tenantId = openTenant(user);
+        requireContract(tenantId, contractId);
+        return requireVersion(tenantId, contractId, versionId);
+    }
+
+    @Transactional
     public void unlinkFile(AuthenticatedUser user, UUID contractId, UUID fileId) {
         UUID tenantId = openTenant(user);
         requireContract(tenantId, contractId);
@@ -156,6 +206,11 @@ public class ContractService {
     private ContractRow requireContract(UUID tenantId, UUID contractId) {
         return contracts.find(tenantId, contractId)
                 .orElseThrow(() -> new ContractException(HttpStatus.NOT_FOUND, "合同不存在"));
+    }
+
+    private ContractVersionView requireVersion(UUID tenantId, UUID contractId, UUID versionId) {
+        return contracts.findVersion(tenantId, contractId, versionId)
+                .orElseThrow(() -> new ContractException(HttpStatus.NOT_FOUND, "版本不存在"));
     }
 
     private UUID openTenant(AuthenticatedUser user) {

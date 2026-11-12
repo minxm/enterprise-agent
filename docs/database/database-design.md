@@ -235,7 +235,9 @@ erDiagram
 
 `stored_file` 是通用文件登记。桶名仍是 `enterprise-agent`。对象键由服务端生成，形式为 `{tenant_id}/files/{yyyy}/{MM}/{file_id}.{ext}`，不使用客户端文件名。状态为 `ready`、`deleted` 或 `failed`。表启用与身份表相同的租户 RLS。
 
-Day 13 已创建 `business.contract` 和 `business.contract_file`。合同名称列是 `title`。状态使用业务生命周期 `draft`、`pending_review`、`approved`、`rejected`、`effective`、`expired`、`terminated`，不使用上面与 Agent 审核绑定的状态。`contract_file` 只引用 `stored_file`，并记录 `file_role`，不保存对象键或文件字节。上面的审核状态和版本文件留到后续审核工作流，当前迁移没有创建那些列。
+Day 13 已创建 `business.contract` 和 `business.contract_file`。合同名称列是 `title`。状态使用业务生命周期 `draft`、`pending_review`、`approved`、`rejected`、`effective`、`expired`、`terminated`，不使用上面与 Agent 审核绑定的状态。`contract_file` 只引用 `stored_file`，并记录 `file_role`，不保存对象键或文件字节。
+
+Day 14 增加 `business.contract_version`。版本号由服务端从 1 递增，展示标签为 `V1`、`V2`。同一合同用部分唯一索引保证最多一条 `is_current`。版本只引用 `stored_file`，不把同一文件再写入 `contract_file`。只有 `draft` 和 `rejected` 可以创建新版本。没有版本回滚，也不把历史版本直接改回当前版本。上面的审核会话和带对象键的文件版本仍留到后续审核工作流。
 
 ### 5.3 会话、草稿与审批
 
