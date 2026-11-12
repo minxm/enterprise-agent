@@ -17,19 +17,21 @@ $env:JAVA_HOME = "D:\Program Files\Java\jdk-25.0.4.1+1"
 $env:Path = "$env:JAVA_HOME\bin;D:\Programs\maven\apache-maven-3.9.11\bin;$env:Path"
 ```
 
-## 启动 PostgreSQL 和 Redis
+## 启动 PostgreSQL、Redis 和 MinIO
 
 在仓库根目录复制 `.env.example` 为 `.env`，填写密码后再启动。密码只留在本机 `.env`。
 
 ```powershell
 cd D:\enterprise-agent
-docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis minio minio-init
 docker compose --env-file .env -f deploy/docker-compose.yml ps
 ```
 
 PostgreSQL 镜像是 `pgvector/pgvector:0.8.7-pg16`，只监听 `127.0.0.1:5432`。首次初始化会创建 `vector` 扩展、`business` 和 `agent` schema，以及 `business_migrator`、`business_app`、`agent_migrator`、`agent_app`。这些角色不是超级用户。Java 的 Flyway 使用 `business_migrator`，业务连接使用 `business_app`。Python 使用 `agent_app`，`search_path` 只有 `agent`。
 
 Redis 镜像是 `redis:7.4.12-alpine`，只监听 `127.0.0.1:6379`，开启 AOF。不要执行 `docker compose down -v`，那会删掉数据卷。
+
+MinIO 服务器版本是 `RELEASE.2025-09-07T16-13-09Z`，客户端是 `RELEASE.2025-08-13T08-35-41Z`。官方仓库已不能匿名拉取，Compose 使用同一摘要的公开副本。API 监听 `127.0.0.1:9000`，控制台监听 `127.0.0.1:9001`。桶名是 `enterprise-agent`，数据在卷 `minio-data`。Java 通过环境变量读取 Root 凭据，不把它们交给前端。
 
 Java 要连上数据库时，先把 `.env` 加载到进程环境，再使用 `dev` profile：
 

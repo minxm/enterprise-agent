@@ -9,6 +9,9 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
@@ -22,9 +25,22 @@ public class GlobalExceptionHandler {
         return error(exception.getStatus(), exception.getMessage());
     }
 
-    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+    @ExceptionHandler({
+            MethodArgumentNotValidException.class,
+            HttpMessageNotReadableException.class,
+            MethodArgumentTypeMismatchException.class
+    })
     public ResponseEntity<ApiResponse<Void>> handleInvalidRequest(Exception exception) {
         log.warn("Rejected invalid request: {}", exception.getClass().getSimpleName());
+        return error(HttpStatus.BAD_REQUEST, "请求参数不合法");
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMultipart(MultipartException exception) {
+        log.warn("Rejected upload: {}", exception.getClass().getSimpleName());
+        if (exception instanceof MaxUploadSizeExceededException || exception.getCause() instanceof MaxUploadSizeExceededException) {
+            return error(HttpStatus.BAD_REQUEST, "文件大小超出限制");
+        }
         return error(HttpStatus.BAD_REQUEST, "请求参数不合法");
     }
 

@@ -231,7 +231,9 @@ erDiagram
 | `uploaded_by` | 非空 |
 | `created_at`、`updated_at` | 非空 |
 
-文件字节不进入 `contract_file` 和 `policy_document`。大小上限待确认，建议 20MB，由 Java 在写入前拒绝。`index_status` 由 Java 按入库 HTTP 结果更新。切片内容仍只在 `agent.knowledge_chunk`。
+文件字节不进入 `contract_file` 和 `policy_document`。大小上限是 20MB，由 Java 在写入前拒绝。`index_status` 由 Java 按入库 HTTP 结果更新。切片内容仍只在 `agent.knowledge_chunk`。
+
+`stored_file` 是通用文件登记，供合同和条款库建立之前的上传、下载和删除使用。它不代替 `contract_file` 或 `policy_document`。桶名仍是 `enterprise-agent`。对象键由服务端生成，形式为 `{tenant_id}/files/{yyyy}/{MM}/{file_id}.{ext}`，不使用客户端文件名。状态为 `ready`、`deleted` 或 `failed`。表启用与身份表相同的租户 RLS。
 
 ### 5.3 会话、草稿与审批
 

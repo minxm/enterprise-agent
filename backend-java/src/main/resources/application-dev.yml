@@ -3,6 +3,12 @@ enterprise:
     secret: ${JWT_SECRET}
     issuer: ${JWT_ISSUER:enterprise-agent}
     ttl: ${JWT_TTL:2h}
+  storage:
+    endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+    access-key: ${MINIO_ROOT_USER:}
+    secret-key: ${MINIO_ROOT_PASSWORD:}
+    bucket: ${MINIO_BUCKET:enterprise-agent}
+    max-bytes: ${FILE_MAX_BYTES:20971520}
 
 spring:
   datasource:

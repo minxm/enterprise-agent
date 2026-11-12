@@ -16,13 +16,13 @@
 
 本地密钥放在仓库根目录的 `.env`，由 `.env.example` 复制得到。`.env` 不提交。
 
-三个应用先分别在本机启动。PostgreSQL 和 Redis 用 Docker Compose 启动：
+三个应用先分别在本机启动。PostgreSQL、Redis 和 MinIO 用 Docker Compose 启动：
 
 ```powershell
 Copy-Item .env.example .env
 # 在 .env 中填写密码，不要把真实密码写入源码
 
-docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis minio minio-init
 ```
 
 Java 使用 `dev` profile 连接 `business` schema 和 Redis。Python 默认不在启动时连接数据库；需要连接池时把 `ENTERPRISE_INFRA_ENABLED` 设为 `true`。变量说明见根目录 `.env.example`。

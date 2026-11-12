@@ -7,6 +7,10 @@ spring:
       - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
       - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
 
 logging:
   pattern:
