@@ -34,6 +34,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -130,13 +131,14 @@ class FileIntegrationTest {
         assertEquals(checksum + "|enterprise-agent|" + PDF.length + "|ready", metadata);
         assertEquals(true, storage.exists(properties.getBucket(), objectKey));
 
-        byte[] downloaded = mockMvc.perform(get("/api/v1/files/" + fileId + "/download")
+        MvcResult started = mockMvc.perform(get("/api/v1/files/" + fileId + "/download")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Content-Disposition", org.hamcrest.Matchers.containsString("notes.pdf")))
-                .andReturn()
-                .getResponse()
-                .getContentAsByteArray();
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        started.getAsyncResult();
+        byte[] downloaded = started.getResponse().getContentAsByteArray();
         assertArrayEquals(PDF, downloaded);
 
         mockMvc.perform(get("/api/v1/files").header("Authorization", "Bearer " + token).param("tenantId", UUID.randomUUID().toString()))

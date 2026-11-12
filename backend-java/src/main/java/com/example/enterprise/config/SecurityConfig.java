@@ -56,6 +56,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers("/api/v1/identity/**").authenticated()
                         .requestMatchers("/api/v1/files/**").authenticated()
+                        .requestMatchers("/api/v1/contracts/**").authenticated()
                         .anyRequest().permitAll())
                 .build();
     }

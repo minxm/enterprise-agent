@@ -233,7 +233,9 @@ erDiagram
 
 文件字节不进入 `contract_file` 和 `policy_document`。大小上限是 20MB，由 Java 在写入前拒绝。`index_status` 由 Java 按入库 HTTP 结果更新。切片内容仍只在 `agent.knowledge_chunk`。
 
-`stored_file` 是通用文件登记，供合同和条款库建立之前的上传、下载和删除使用。它不代替 `contract_file` 或 `policy_document`。桶名仍是 `enterprise-agent`。对象键由服务端生成，形式为 `{tenant_id}/files/{yyyy}/{MM}/{file_id}.{ext}`，不使用客户端文件名。状态为 `ready`、`deleted` 或 `failed`。表启用与身份表相同的租户 RLS。
+`stored_file` 是通用文件登记。桶名仍是 `enterprise-agent`。对象键由服务端生成，形式为 `{tenant_id}/files/{yyyy}/{MM}/{file_id}.{ext}`，不使用客户端文件名。状态为 `ready`、`deleted` 或 `failed`。表启用与身份表相同的租户 RLS。
+
+Day 13 已创建 `business.contract` 和 `business.contract_file`。合同名称列是 `title`。状态使用业务生命周期 `draft`、`pending_review`、`approved`、`rejected`、`effective`、`expired`、`terminated`，不使用上面与 Agent 审核绑定的状态。`contract_file` 只引用 `stored_file`，并记录 `file_role`，不保存对象键或文件字节。上面的审核状态和版本文件留到后续审核工作流，当前迁移没有创建那些列。
 
 ### 5.3 会话、草稿与审批
 

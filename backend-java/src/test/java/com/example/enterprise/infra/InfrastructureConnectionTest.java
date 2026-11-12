@@ -50,7 +50,7 @@ class InfrastructureConnectionTest {
                 assertTrue(history.getBoolean(1));
             }
             try (ResultSet contract = statement.executeQuery(
-                    "select to_regclass('business.contract') is null")) {
+                    "select to_regclass('business.contract') is not null")) {
                 assertTrue(contract.next());
                 assertTrue(contract.getBoolean(1));
             }
