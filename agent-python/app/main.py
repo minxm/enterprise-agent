@@ -1,4 +1,5 @@
-﻿from contextlib import asynccontextmanager
+﻿import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -8,6 +9,7 @@ from app.core.errors import install_exception_handlers
 from app.core.logging_config import configure_logging
 from app.core.request_middleware import RequestIdMiddleware
 from app.persistence import infra
+from app.persistence.migrate import apply_migrations
 
 configure_logging()
 
@@ -15,6 +17,7 @@ configure_logging()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if settings.enterprise_infra_enabled:
+        await asyncio.to_thread(apply_migrations, settings)
         await infra.open(settings)
     try:
         yield

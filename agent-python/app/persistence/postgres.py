@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from psycopg import Connection, OperationalError
 from psycopg_pool import ConnectionPool
@@ -122,3 +124,20 @@ def read_probe(connection: Connection) -> dict[str, object]:
         "business_usage": bool(business_usage),
         "agent_run_absent": bool(agent_run_absent),
     }
+
+
+@contextmanager
+def tenant_transaction(pool: ConnectionPool, tenant_id: str) -> Iterator[Connection]:
+    """Run one transaction as agent_app for a single tenant.
+
+    The pool context commits when this block exits normally and rolls the
+    transaction back when it raises. set_config is local to that transaction,
+    so the tenant does not stay on the pooled connection.
+    """
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise RuntimeError("tenant_id 不能为空")
+    with pool.connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("select set_config('app.tenant_id', %s, true)", (tenant_id,))
+            cursor.fetchone()
+        yield connection

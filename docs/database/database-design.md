@@ -455,38 +455,45 @@ checkpoint 表由 `langgraph-checkpoint-postgres` 的 `PostgresSaver.setup()` �
 
 ### 7.1 知识库表
 
+当前已经实现的是文档与切片的持久化。表在 `agent` schema，由 `agent-python/migrations/001_knowledge.sql` 创建。`file_id` 只保存对 `business.stored_file.id` 的逻辑引用，不建跨 schema 外键。两张表都启用并强制 RLS，策略名是 `tenant_isolation`。
+
 `knowledge_document`
 
 | 列 | 约束 |
 | --- | --- |
-| `id` | 主键 |
+| `id` | UUID 主键 |
 | `tenant_id` | 非空 |
-| `source_type` | `contract_file` 或 `policy` |
-| `source_id` | 非空，逻辑引用 |
-| `content_hash` | 非空 |
-| `status` | `pending`、`ready`、`failed` |
-| `error_code` | 可空 |
+| `document_name` | 非空，1–200 个字符 |
+| `file_id` | 可空，逻辑引用 |
+| `file_type` | `pdf` 或 `docx` |
+| `file_checksum` | 原始字节的 SHA-256，64 位小写十六进制 |
+| `status` | 已落库的行只有 `ready` |
+| `total_chunks` | 非空，至少为 1 |
 | `created_at`、`updated_at` | 非空 |
 
-唯一约束：`(tenant_id, source_type, source_id, content_hash)`。同一文件内容重复入库时复用该行。
+唯一约束：`(id, tenant_id)`。有 `file_id` 时，部分唯一索引是 `(tenant_id, file_id)`。没有 `file_id` 时，部分唯一索引是 `(tenant_id, file_checksum)`。同一 `file_id` 的相同校验和复用原行，不重写切片；校验和变化时保留 `id`，在同一事务内替换切片。没有 `file_id` 时，相同校验和复用原行，不同校验和新建一行。解析失败或写入失败会回滚，不保留半份数据，也不写入 `pending` 或 `failed` 行。
 
 `knowledge_chunk`
 
 | 列 | 约束 |
 | --- | --- |
-| `id` | 主键 |
+| `id` | UUID 主键 |
 | `tenant_id` | 非空 |
 | `document_id` | 非空 |
 | `chunk_index` | 从 0 递增 |
 | `content` | 非空 |
-| `embedding` | `vector(N)`，N 待确认 |
+| `char_count` | 等于 `content` 的字符数。当前没有分词器，不设 `token_count` |
+| `metadata` | `jsonb`，当前保存 `char_start`、`char_end`、`file_type` |
 | `created_at` | 非空 |
 
-唯一约束：`(document_id, chunk_index)`。索引：`(tenant_id, document_id)`。
+复合外键：`(document_id, tenant_id)` 引用 `knowledge_document (id, tenant_id)`，`ON DELETE CASCADE`。唯一约束：`(document_id, chunk_index)`。索引：`(tenant_id, document_id)`。当前没有 `embedding` 列。
 
-向量索引在 N 确定之后再建，类型在 HNSW 与 IVFFlat 之间选择，待确认。检索条件必须包含 `tenant_id`。合同审核还要能限制到当前文件对应的 `knowledge_document`，以及本租户 `source_type = policy` 的文档。
+后续 RAG 仍按下面的方向扩展，本次没有实现：
 
-Java 不查询 `knowledge_document`。文件上传校验通过后，Java 同步调用 `POST /internal/v1/knowledge/ingest`，再把 `contract_file.index_status` 或 `policy_document.index_status` 写成 `ready` 或 `failed`。提交审核只读这个业务列。Python 侧同一 `content_hash` 的重复入库复用已有知识文档。两侧状态短暂不一致时，以重新调用入库接口后的 HTTP 结果为准，不建跨 schema 外键。
+- 嵌入维度确定后，再增加 `embedding public.vector(N)`。Python 连接的 `search_path` 只有 `agent`，向量类型位于 `public`，列定义需要带 schema。向量索引在 N 确定之后再建，类型在 HNSW 与 IVFFlat 之间选择。
+- 检索条件必须包含 `tenant_id`。合同审核还要能限制到当前文件对应的知识文档，以及本租户制度类文档。
+- `source_type`（`contract_file` 或 `policy`）、`error_code`，以及 `pending` / `failed` 状态，留到内部入库接口出现后再决定是否增加。
+- Java 不查询 `knowledge_document`。规划中的流程仍是：Java 同步调用 `POST /internal/v1/knowledge/ingest`，再把业务表上的 `index_status` 写成 `ready` 或 `failed`。该 HTTP 接口、嵌入和向量检索都还没有实现。Python 当前只接受调用方已经取得的字节。两侧将来若出现短暂不一致，仍以重新调用入库接口后的 HTTP 结果为准。
 
 ## 8. 多租户隔离
 
@@ -531,7 +538,7 @@ SELECT set_config('app.tenant_id', :tenant_id, true);
 | --- | --- | --- | --- |
 | 1 | PostgreSQL 首次初始化 | `database/postgres/init` | 扩展、schema、角色、默认权限 |
 | 2 | backend-java 启动 | `backend-java/src/main/resources/db/migration` | Flyway 迁移 `business` |
-| 3 | agent-python 启动 | `agent-python/migrations/{version}_{name}.sql` | 按 `agent.schema_migrations` 执行尚未应用的脚本，然后 `PostgresSaver.setup()` |
+| 3 | agent-python 启动 | `agent-python/migrations/{version}_{name}.sql` | 基础设施启用时，由 `agent_migrator` 按 `agent.schema_migrations` 执行尚未应用的脚本。`PostgresSaver.setup()` 仍是后续 checkpoint 步骤 |
 
 `agent.schema_migrations`：
 
@@ -541,7 +548,7 @@ SELECT set_config('app.tenant_id', :tenant_id, true);
 | `name` | 非空 |
 | `applied_at` | 非空 |
 
-该表没有 `tenant_id`，由 `agent_migrator` 写入。Python 不引入 Alembic。脚本按版本号排序，在一个事务内执行并插入版本行。已存在的版本跳过。
+该表没有 `tenant_id`，由 `agent_migrator` 写入，并撤销 `agent_app` 与 `PUBLIC` 的权限。Python 不引入 Alembic。迁移使用独立的 `agent_migrator` 连接和会话级 Advisory Lock，不复用 `agent_app` 连接池。脚本按版本号排序，每个脚本和它的版本行在同一个事务内执行。已存在的版本跳过。迁移失败则整笔回滚。
 
 Flyway 历史表放在 `business` schema，不使用默认的 `public`。
 
@@ -568,7 +575,8 @@ Flyway 历史表放在 `business` schema，不使用默认的 `public`。
 | `approval_task (tenant_id, session_id)` 部分唯一，`pending` | 不会产生两张待办 |
 | `agent_run (tenant_id, idempotency_key)` 唯一 | 启动运行重试 |
 | `tool_invocation (tenant_id, idempotency_key)` 唯一 | 工具重试 |
-| `knowledge_document (tenant_id, source_type, source_id, content_hash)` 唯一 | 重复入库 |
+| `knowledge_document (tenant_id, file_id)` 部分唯一，`file_id` 非空 | 同一文件只有一条当前知识文档 |
+| `knowledge_document (tenant_id, file_checksum)` 部分唯一，`file_id` 为空 | 无文件 ID 时按原始字节复用 |
 | `knowledge_chunk (document_id, chunk_index)` 唯一 | 切片顺序 |
 
 Redis 键不替代上表：

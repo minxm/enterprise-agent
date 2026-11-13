@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     postgres_db: str = ""
     agent_app_user: str = "agent_app"
     agent_app_password: str = ""
+    agent_migrator_user: str = "agent_migrator"
+    agent_migrator_password: str = ""
     redis_host: str = ""
     redis_port: int = 6379
     redis_password: str = ""
