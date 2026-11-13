@@ -484,16 +484,19 @@ checkpoint 表由 `langgraph-checkpoint-postgres` 的 `PostgresSaver.setup()` �
 | `content` | 非空 |
 | `char_count` | 等于 `content` 的字符数。当前没有分词器，不设 `token_count` |
 | `metadata` | `jsonb`，当前保存 `char_start`、`char_end`、`file_type` |
+| `embedding` | `public.vector(1024)`，可空。由 `migrations/002_chunk_embedding.sql` 增加 |
+| `embedding_model` | 可空。向量写入时记录 `Qwen/Qwen3-Embedding-0.6B` |
+| `embedded_at` | 可空。同一批向量使用同一个事务时间 |
 | `created_at` | 非空 |
 
-复合外键：`(document_id, tenant_id)` 引用 `knowledge_document (id, tenant_id)`，`ON DELETE CASCADE`。唯一约束：`(document_id, chunk_index)`。索引：`(tenant_id, document_id)`。当前没有 `embedding` 列。
+复合外键：`(document_id, tenant_id)` 引用 `knowledge_document (id, tenant_id)`，`ON DELETE CASCADE`。唯一约束：`(document_id, chunk_index)`。索引：`(tenant_id, document_id)`。`embedding`、`embedding_model`、`embedded_at` 三者同时为空，或者三者同时有效且模型名长度为 1–200。向量化由 `VectorizationService` 完成：先读取 Chunk，再调用 SiliconFlow，最后在新事务中写回。当前没有向量化 HTTP 接口，也没有 HNSW 或 IVFFlat 索引。
 
 后续 RAG 仍按下面的方向扩展，本次没有实现：
 
-- 嵌入维度确定后，再增加 `embedding public.vector(N)`。Python 连接的 `search_path` 只有 `agent`，向量类型位于 `public`，列定义需要带 schema。向量索引在 N 确定之后再建，类型在 HNSW 与 IVFFlat 之间选择。
+- 向量索引在检索实现时再建，类型在 HNSW 与 IVFFlat 之间选择。Python 连接的 `search_path` 只有 `agent`，所以列类型必须继续写成 `public.vector(1024)`。
 - 检索条件必须包含 `tenant_id`。合同审核还要能限制到当前文件对应的知识文档，以及本租户制度类文档。
 - `source_type`（`contract_file` 或 `policy`）、`error_code`，以及 `pending` / `failed` 状态，留到内部入库接口出现后再决定是否增加。
-- Java 不查询 `knowledge_document`。规划中的流程仍是：Java 同步调用 `POST /internal/v1/knowledge/ingest`，再把业务表上的 `index_status` 写成 `ready` 或 `failed`。该 HTTP 接口、嵌入和向量检索都还没有实现。Python 当前只接受调用方已经取得的字节。两侧将来若出现短暂不一致，仍以重新调用入库接口后的 HTTP 结果为准。
+- Java 不查询 `knowledge_document`。规划中的流程仍是：Java 同步调用 `POST /internal/v1/knowledge/ingest`，再把业务表上的 `index_status` 写成 `ready` 或 `failed`。该 HTTP 接口、向量检索和混合检索都还没有实现。Python 当前只接受调用方已经取得的字节，并可以在入库之后单独向量化。两侧将来若出现短暂不一致，仍以重新调用入库接口后的 HTTP 结果为准。
 
 ## 8. 多租户隔离
 

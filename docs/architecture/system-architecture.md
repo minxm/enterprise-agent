@@ -96,11 +96,9 @@ LangGraph 的 checkpoint 只保存这一次图执行的短期状态。长期记�
 | httpx | 调用 Java 内部接口和 OpenAI 兼容模型接口 |
 | psycopg | 访问 `agent` schema |
 
-模型供应商待确认。第一阶段通过 OpenAI 兼容 HTTP 接口接入，不把某一家供应商 SDK 列为架构组件。仓库中的 `siliconflow.py` 只是兼容接口的一种实现位置。
+Embedding 使用 SiliconFlow 的 OpenAI 兼容接口，客户端在 `app/knowledge/embeddings.py`，不引入供应商 SDK。模型是 `Qwen/Qwen3-Embedding-0.6B`，输出 1024 维。`VectorizationService` 把向量写入 `agent.knowledge_chunk.embedding`，类型是 `public.vector(1024)`，并记录 `embedding_model` 与 `embedded_at`。当前没有向量化 HTTP 接口，也没有 HNSW 索引。向量检索和混合检索仍是后续阶段。聊天模型供应商仍待确认。
 
-嵌入模型名称和向量维度待确认。维度在建 `knowledge_chunk.embedding` 之前必须定下来，并在迁移里写成 `vector(N)`。
-
-PDF、DOCX、纯文本的解析库待确认，实现落在已有的 `app/rag/loaders`，不单独起解析服务。
+PDF 与 DOCX 解析在 `app/documents`。纯文本解析尚未实现，也不单独起解析服务。
 
 `app/observability/langsmith.py` 第一阶段不作为运行依赖。是否启用待确认。
 
