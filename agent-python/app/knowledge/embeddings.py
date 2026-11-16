@@ -17,6 +17,10 @@ from app.core.config import EMBEDDING_MODEL_NAME, EMBEDDING_WIDTH, Settings
 
 _MAX_ATTEMPTS = 3
 _MAX_BACKOFF_SECONDS = 2.0
+_QUERY_INSTRUCTION = (
+    "Instruct: Retrieve relevant enterprise knowledge passages that answer the user's question.\n"
+    "Query: "
+)
 
 
 class EmbeddingError(RuntimeError):
@@ -99,6 +103,18 @@ class EmbeddingClient:
             vectors.extend(self._embed_batch(items[start : start + self._batch_size]))
         return vectors
 
+    def embed_query(self, query: str) -> list[float]:
+        """Embed one user question for retrieval.
+
+        The retrieval instruction is applied only on this path. Document chunk
+        texts must continue to go through embed() unchanged.
+        """
+        question = _require_question(query)
+        vectors = self.embed(f"{_QUERY_INSTRUCTION}{question}")
+        if len(vectors) != 1:
+            raise EmbeddingResponseError("查询向量数量不正确")
+        return _require_query_vector(vectors[0])
+
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
         if not self._api_key:
             raise EmbeddingConfigurationError("SILICONFLOW_API_KEY 未配置")
@@ -139,6 +155,20 @@ def format_vector(values: list[float]) -> str:
     """Serialize an already validated vector for a parameterized SQL cast."""
     checked = _finite_vector(values)
     return json.dumps(checked, allow_nan=False, separators=(",", ":"))
+
+
+def _require_question(query: object) -> str:
+    if not isinstance(query, str) or not query.strip():
+        raise EmbeddingConfigurationError("查询内容不能为空")
+    return query.strip()
+
+
+def _require_query_vector(vector: list[float]) -> list[float]:
+    if len(vector) != EMBEDDING_WIDTH:
+        raise EmbeddingResponseError("向量维度不正确")
+    if any(not math.isfinite(item) for item in vector):
+        raise EmbeddingResponseError("向量包含非法数值")
+    return vector
 
 
 def _normalize_texts(texts: str | list[str]) -> list[str]:

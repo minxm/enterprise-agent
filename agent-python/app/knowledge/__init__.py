@@ -12,6 +12,7 @@ from app.knowledge.ingest import (
     KnowledgeIngestionService,
     KnowledgeValidationError,
 )
+from app.knowledge.retrieval import RetrievalHit, RetrievalValidationError, VectorRetriever
 from app.knowledge.vectorization import (
     DocumentNotFoundError,
     VectorizationConflictError,
@@ -31,7 +32,10 @@ __all__ = [
     "IngestResult",
     "KnowledgeIngestionService",
     "KnowledgeValidationError",
+    "RetrievalHit",
+    "RetrievalValidationError",
     "TextChunk",
+    "VectorRetriever",
     "VectorizationConflictError",
     "VectorizationResult",
     "VectorizationService",
