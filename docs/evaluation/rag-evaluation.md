@@ -1,6 +1,6 @@
-# RAG 离线评估
+# RAG 评估
 
-评估数据和指标都在 Python 进程内计算。默认运行不调用 SiliconFlow，也不读写 PostgreSQL 里的生产知识库。
+Day 20 的默认评估在 Python 进程内计算。它不调用 SiliconFlow，也不读写 PostgreSQL。Day 21 在显式加上 `--live-pgvector` 之后，把评估语料写入专用租户，并用真实的 PostgreSQL + pgvector 检索。两条链路的报告用 `mode` 区分，不会放在一起算平均分。
 
 ## 设计
 
@@ -126,5 +126,93 @@ python -m scripts.evaluate_rag --dataset evaluation_data/enterprise_contract_eva
 - 离线分数衡量的是词面重叠和提示回显，不是线上模型的回答质量。
 - 关键词覆盖率不能当作 Faithfulness。
 - 拒答判断是短语规则，可能漏掉没有使用这些说法的拒答，也可能把引用了这些说法的正常说明判成拒答。
-- 真实评估没有把语料写入 pgvector，因此它检查的是同一套 `RAGService` 和模型接口，不是生产库上的 HNSW 或 SQL 检索计划。
+- `--live` 没有把语料写入 pgvector。它检查的是同一套 `RAGService` 和模型接口，不是数据库里的向量检索。
+- `--live-pgvector` 只评估检索，不调用 Chat Model，因此没有答案质量分数。
 - 评估器不会把单个失败吞掉，但也不会在第一条失败时停止后面的样本。
+
+## Day 20 与 Day 21
+
+| | Day 20 离线 | Day 20 `--live` | Day 21 `--live-pgvector` |
+| --- | --- | --- | --- |
+| 检索 | 词面重叠 | 内存余弦相似度 | `VectorRetriever.search` |
+| 向量存放 | 不生成 | 进程内存 | PostgreSQL `public.vector(1024)` |
+| Chat Model | 不调用 | 调用 | 不调用 |
+| 默认是否执行 | 是 | 否 | 否 |
+
+离线报告的 `mode` 是 `offline`。内存真实模型报告的 `mode` 是 `live`。pgvector 报告的 `mode` 和 `evaluation_mode` 都是 `pgvector`。准备数据和清理数据使用 `pgvector-prepare`、`pgvector-cleanup`，这两份报告的 `retrieval_metrics` 为空，不能拿来和检索分数平均。
+
+## 评估租户和数据隔离
+
+评估租户固定为 `00000000-0000-4000-8000-00000000e021`。它只写在评估模块里，不进入应用配置，也不是业务租户。
+
+所有读写都走现有的 `tenant_transaction`，由它设置 `app.tenant_id`，因此 RLS 仍然生效。评估代码不访问 `business` schema，也不新增表或修改 migration。
+
+每条标准片段对应一篇 DOCX。`file_id` 由数据集名称和标准 `chunk_id` 通过 UUID v5 稳定生成。打包时把 ZIP 条目时间固定下来，同一段文字每次生成的文件校验和相同，入库服务才能认出这是同一篇文档。再次运行时如果校验和未变，并且唯一的 Chunk 已经有模型 `Qwen/Qwen3-Embedding-0.6B` 和 1024 维向量，就不再调用 Embedding，也不再插入文档。
+
+清理只删除当前数据集这些 `file_id`。同一个评估租户里、属于其他数据集的文档会留下。其他租户的文档因为租户条件、RLS 和清理前的租户校验，都不会被这条命令删除。清理包在一个事务里；中途失败会整批回滚。
+
+`--cleanup` 默认关闭。不加 `--live-pgvector` 时，清理参数会被拒绝。
+
+## 数据如何进入数据库
+
+1. 读取 Day 20 的 `enterprise_contract_eval.json`。其中的 `expected_chunk_ids` 是标准片段编号，不是数据库生成的 Chunk UUID。
+2. 把每条 `passages.content` 打成一篇 DOCX，先用现有的提取和 `chunk_text` 检查它恰好变成一个 Chunk，并且正文与标准片段一致。对不上就停止，不用猜测的 ID 计分。
+3. `KnowledgeIngestionService.ingest` 写入 `agent.knowledge_document` 和 `agent.knowledge_chunk`。
+4. 向量缺失、模型不对或维度不是 1024 时，调用 `VectorizationService.vectorize`。评估代码不自己写 `embedding` 列，也不使用随机向量。
+5. 记下标准片段 ID、`document_id` 和数据库 `chunk_id` 的对应关系。
+
+当前语料都是短句，默认 800 字的切分会保持一段对一段。如果以后的片段被切成多段，准备阶段会失败。
+
+## pgvector 检索
+
+每条问题调用现有的 `VectorRetriever.search`。查询向量仍由 `EmbeddingClient.embed_query` 生成，文档向量仍是入库时 `embed` 的结果，两边的文本格式保持 Day 18 的差异。
+
+返回顺序不重新排序。数据库 Chunk UUID 先映射回标准片段 ID，再交给 Day 20 的 `score_retrieval` 和 `aggregate_retrieval`。空的 `expected_chunk_ids` 不进入 Hit Rate、Recall、MRR 的平均。检索返回空列表是未命中，记 0 分；抛出的异常记入 `failures`，不记成 0 分。
+
+`embedding_latency_ms` 是 `search` 内部查询向量那一次调用的耗时。`retrieval_latency_ms` 是 `search` 总耗时减去它，里面包含 SQL 和少量 Python 开销。入库和向量化的时间记在 `prepare_elapsed_seconds`，不混进单题检索耗时。这些数字只描述当前机器和当前配置。
+
+## 运行真实向量评估
+
+在 `agent-python` 目录执行。输出目录必须已经存在。
+
+```bash
+python -m scripts.evaluate_rag --dataset evaluation_data/enterprise_contract_eval.json --top-k 5 --output reports/pgvector.json --live-pgvector
+```
+
+只入库、不检索：
+
+```bash
+python -m scripts.evaluate_rag --dataset evaluation_data/enterprise_contract_eval.json --top-k 5 --output reports/pgvector-prepare.json --live-pgvector --prepare-only
+```
+
+清理当前数据集在评估租户中的文档：
+
+```bash
+python -m scripts.evaluate_rag --dataset evaluation_data/enterprise_contract_eval.json --top-k 5 --output reports/pgvector-cleanup.json --live-pgvector --cleanup
+```
+
+需要 `POSTGRES_HOST`、`POSTGRES_DB`、`AGENT_APP_PASSWORD`。除了只清理之外，还需要 `SILICONFLOW_API_KEY`。缺配置、参数冲突或报告目录不存在时退出码为 2。某条检索执行失败时退出码为 1。这条命令不会调用 Chat Model。
+
+## pgvector 报告字段
+
+在 Day 20 字段之外增加：
+
+| 字段 | 说明 |
+| --- | --- |
+| `evaluation_mode` | `pgvector`、`pgvector-prepare` 或 `pgvector-cleanup` |
+| `tenant_id` | 评估租户 |
+| `embedding_model` | 入库向量的模型名 |
+| `database_vector_dimension` | 数据库中的向量维度 |
+| `top_k` | 本次 K |
+| `hit_rate_at_k` / `recall_at_k` / `mrr_at_k` | 与 `retrieval_metrics` 中的三项相同 |
+| `embedding_latency_ms` / `retrieval_latency_ms` / `total_latency_ms` | 成功样本的耗时合计，单位毫秒 |
+| `per_case_results` | 每题的 `expected_chunk_ids`、`actual_chunk_ids`、映射后的 `retrieved_chunk_ids`、`similarities` 和三项指标 |
+
+`answer_metrics.evaluated` 为 false，`case_count` 为 0。这表示没有做答案评估，不是拒答得了 0 分。
+
+## 当前局限
+
+- 标准片段必须能被现有切分器切成恰好一段。做不到时整次评估停止。
+- 检索分数反映的是当前 Embedding 模型和 pgvector 的余弦排序，没有 Hybrid Search、Reranker 或 HNSW。
+- 耗时包含本机网络和进程开销，不能当作生产容量数据。
+- 评估文档留在专用租户里，直到显式执行 `--cleanup`。清理不会顺便删掉其他租户。

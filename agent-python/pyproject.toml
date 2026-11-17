@@ -33,3 +33,7 @@ include = ["app*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "postgres: 需要真实 PostgreSQL，不调用 SiliconFlow",
+    "siliconflow: 需要真实 SiliconFlow API，默认跳过",
+]
