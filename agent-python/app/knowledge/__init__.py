@@ -12,6 +12,7 @@ from app.knowledge.ingest import (
     KnowledgeIngestionService,
     KnowledgeValidationError,
 )
+from app.knowledge.rag import RAGAnswer, RAGService, RAGSource, RAGValidationError
 from app.knowledge.retrieval import RetrievalHit, RetrievalValidationError, VectorRetriever
 from app.knowledge.vectorization import (
     DocumentNotFoundError,
@@ -32,6 +33,10 @@ __all__ = [
     "IngestResult",
     "KnowledgeIngestionService",
     "KnowledgeValidationError",
+    "RAGAnswer",
+    "RAGService",
+    "RAGSource",
+    "RAGValidationError",
     "RetrievalHit",
     "RetrievalValidationError",
     "TextChunk",
