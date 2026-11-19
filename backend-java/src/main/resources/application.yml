@@ -22,3 +22,7 @@ agent:
     health-path: /api/v1/health
     connect-timeout: 3s
     read-timeout: 5s
+    knowledge-qa-path: /internal/v1/knowledge-qa/stream
+    knowledge-qa-history-path: /internal/v1/knowledge-qa/conversations/{conversationId}/messages
+    stream-read-timeout: 60s
+    internal-token: ${AGENT_INTERNAL_TOKEN:}

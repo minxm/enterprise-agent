@@ -3,13 +3,33 @@ import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 /** 空字符串表示同源请求。开发环境由 Vite 代理到 Java，生产环境由网关转发。 */
 const baseURL = import.meta.env.VITE_API_BASE_URL ?? '';
 
+const ACCESS_TOKEN_STORAGE_KEY = 'enterprise-agent.access-token';
+
 type TokenReader = () => string | undefined;
 
 let readAccessToken: TokenReader = () => undefined;
 
-/** 后续登录态只放内存，由调用方注册读取函数。这里不保存、不硬编码令牌。 */
+/** 调用方可以替换读取函数。这里不硬编码令牌。 */
 export function setAccessTokenReader(reader: TokenReader): void {
   readAccessToken = reader;
+}
+
+/** 登录成功后写入 sessionStorage，并让后续请求读到这份 token。 */
+export function rememberAccessToken(token: string): void {
+  writeStoredAccessToken(token);
+  setAccessTokenReader(() => token);
+}
+
+/** 页面重新加载后从 sessionStorage 恢复。没有记录时读取函数返回空。 */
+export function restoreAccessToken(): string | undefined {
+  const token = readStoredAccessToken();
+  setAccessTokenReader(() => token);
+  return token;
+}
+
+export function currentAuthorization(): string | undefined {
+  const token = readAccessToken();
+  return token ? `Bearer ${token}` : undefined;
 }
 
 export class RequestError extends Error {
@@ -109,4 +129,21 @@ function readErrorCode(data: unknown, status: number): number {
 function headerText(value: unknown): string | undefined {
   const candidate = Array.isArray(value) ? value[0] : value;
   return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
+function readStoredAccessToken(): string | undefined {
+  try {
+    const value = globalThis.sessionStorage?.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    return value && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStoredAccessToken(token: string): void {
+  try {
+    globalThis.sessionStorage?.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // 浏览器禁止存储时仍保留本次内存中的登录态。
+  }
 }

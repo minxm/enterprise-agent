@@ -33,6 +33,12 @@ class EvalCase:
     expected_answer: str | None
     should_refuse: bool
     description: str
+    expected_answerable: bool | None = None
+    expected_response_type: str | None = None
+    expected_claims: tuple[str, ...] | None = None
+    expected_evidence: tuple[str, ...] | None = None
+    expected_conflict: bool | None = None
+    expected_refusal_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,17 @@ _CASE_FIELDS = frozenset(
         "description",
     }
 )
+_OPTIONAL_CASE_FIELDS = frozenset(
+    {
+        "expected_answerable",
+        "expected_response_type",
+        "expected_claims",
+        "expected_evidence",
+        "expected_conflict",
+        "expected_refusal_reason",
+    }
+)
+_RESPONSE_TYPES = frozenset({"answer", "refusal", "partial_answer", "conflict"})
 
 
 def load_dataset(path: Path | str) -> EvaluationDataset:
@@ -110,7 +127,7 @@ def _parse_case(item: object, index: int, known_chunks: set[str]) -> EvalCase:
     label = f"cases[{index}]"
     if not isinstance(item, dict):
         raise EvaluationDatasetError(f"{label} 必须是对象")
-    _require_exact_fields(item, _CASE_FIELDS, label)
+    _require_fields(item, _CASE_FIELDS, _OPTIONAL_CASE_FIELDS, label)
     case_id = _require_text(item.get("case_id"), f"{label}.case_id")
     label = case_id
     question = _require_text(item.get("question"), f"{label}.question")
@@ -126,6 +143,7 @@ def _parse_case(item: object, index: int, known_chunks: set[str]) -> EvalCase:
         raise EvaluationDatasetError(f"{label} 需要回答时 expected_chunk_ids 不能为空")
     if not should_refuse and not expected_facts and expected_answer is None:
         raise EvaluationDatasetError(f"{label} 需要 expected_facts 或 expected_answer")
+    annotations = _parse_annotations(item, label, known_chunks, should_refuse)
     return EvalCase(
         case_id=case_id,
         question=question,
@@ -134,16 +152,87 @@ def _parse_case(item: object, index: int, known_chunks: set[str]) -> EvalCase:
         expected_answer=expected_answer,
         should_refuse=should_refuse,
         description=description,
+        **annotations,
     )
 
 
 def _require_exact_fields(payload: dict[str, object], expected: frozenset[str], label: str) -> None:
-    missing = sorted(expected - payload.keys())
-    extra = sorted(payload.keys() - expected)
+    _require_fields(payload, expected, frozenset(), label)
+
+
+def _require_fields(
+    payload: dict[str, object],
+    required: frozenset[str],
+    optional: frozenset[str],
+    label: str,
+) -> None:
+    missing = sorted(required - payload.keys())
+    extra = sorted(payload.keys() - required - optional)
     if missing:
         raise EvaluationDatasetError(f"{label} 缺少字段：{missing[0]}")
     if extra:
         raise EvaluationDatasetError(f"{label} 包含未知字段：{extra[0]}")
+
+
+def _parse_annotations(
+    item: dict[str, object],
+    label: str,
+    known_chunks: set[str],
+    should_refuse: bool,
+) -> dict[str, object]:
+    present = _OPTIONAL_CASE_FIELDS & item.keys()
+    if not present:
+        return {}
+    missing = sorted(_OPTIONAL_CASE_FIELDS - present)
+    if missing:
+        raise EvaluationDatasetError(f"{label} 的答案质量标注不完整：{missing[0]}")
+    answerable = _require_bool(item.get("expected_answerable"), f"{label}.expected_answerable")
+    response_type = _require_text(item.get("expected_response_type"), f"{label}.expected_response_type")
+    if response_type not in _RESPONSE_TYPES:
+        raise EvaluationDatasetError(f"{label}.expected_response_type 不受支持")
+    claims = _require_text_list(item.get("expected_claims"), f"{label}.expected_claims")
+    evidence = _require_id_list(item.get("expected_evidence"), f"{label}.expected_evidence")
+    conflict = _require_bool(item.get("expected_conflict"), f"{label}.expected_conflict")
+    reason = item.get("expected_refusal_reason")
+    if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+        raise EvaluationDatasetError(f"{label}.expected_refusal_reason 必须是非空字符串或 null")
+    refusal_reason = None if reason is None else reason.strip()
+    unknown = [chunk_id for chunk_id in evidence if chunk_id not in known_chunks]
+    if unknown:
+        raise EvaluationDatasetError(f"{label}.expected_evidence 引用了数据集中不存在的片段：{unknown[0]}")
+    _check_annotation(label, should_refuse, answerable, response_type, claims, evidence, conflict, refusal_reason)
+    return {
+        "expected_answerable": answerable,
+        "expected_response_type": response_type,
+        "expected_claims": tuple(claims),
+        "expected_evidence": tuple(evidence),
+        "expected_conflict": conflict,
+        "expected_refusal_reason": refusal_reason,
+    }
+
+
+def _check_annotation(
+    label: str,
+    should_refuse: bool,
+    answerable: bool,
+    response_type: str,
+    claims: list[str],
+    evidence: list[str],
+    conflict: bool,
+    refusal_reason: str | None,
+) -> None:
+    if response_type == "refusal":
+        if not should_refuse or answerable or conflict or claims or evidence or refusal_reason is None:
+            raise EvaluationDatasetError(f"{label} 的拒答标注与 should_refuse 不一致")
+        return
+    if should_refuse or not answerable or not claims or not evidence:
+        raise EvaluationDatasetError(f"{label} 的回答标注缺少依据")
+    if response_type == "conflict":
+        if not conflict or refusal_reason is not None:
+            raise EvaluationDatasetError(f"{label} 的冲突标注不完整")
+        return
+    if conflict or refusal_reason is not None:
+        raise EvaluationDatasetError(f"{label} 的回答标注包含拒答或冲突字段")
 
 
 def _require_text(value: object, label: str) -> str:

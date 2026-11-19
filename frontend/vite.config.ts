@@ -11,7 +11,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/api': { target: javaTarget, changeOrigin: true },
+      '/api': { target: javaTarget, changeOrigin: true, timeout: 0, proxyTimeout: 0 },
       '/actuator': { target: javaTarget, changeOrigin: true },
     },
   },

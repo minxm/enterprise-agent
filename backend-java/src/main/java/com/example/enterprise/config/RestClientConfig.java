@@ -18,6 +18,11 @@ public class RestClientConfig {
         return create(properties.getBaseUrl(), properties.getConnectTimeout(), properties.getReadTimeout());
     }
 
+    @Bean
+    RestClient agentStreamRestClient(AgentServiceProperties properties) {
+        return create(properties.getBaseUrl(), properties.getConnectTimeout(), properties.getStreamReadTimeout());
+    }
+
     /**
      * HttpURLConnection 的读超时作用在套接字读取上，响应头或响应体停住都会按时失败。
      */

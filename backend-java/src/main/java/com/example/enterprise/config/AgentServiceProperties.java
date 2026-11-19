@@ -22,6 +22,17 @@ public class AgentServiceProperties {
     @NotNull
     private Duration readTimeout = Duration.ofSeconds(5);
 
+    @NotBlank
+    private String knowledgeQaPath = "/internal/v1/knowledge-qa/stream";
+
+    @NotBlank
+    private String knowledgeQaHistoryPath = "/internal/v1/knowledge-qa/conversations/{conversationId}/messages";
+
+    @NotNull
+    private Duration streamReadTimeout = Duration.ofSeconds(60);
+
+    private String internalToken = "";
+
     public String getBaseUrl() {
         return baseUrl;
     }
@@ -52,5 +63,37 @@ public class AgentServiceProperties {
 
     public void setReadTimeout(Duration readTimeout) {
         this.readTimeout = readTimeout;
+    }
+
+    public String getKnowledgeQaPath() {
+        return knowledgeQaPath;
+    }
+
+    public void setKnowledgeQaPath(String knowledgeQaPath) {
+        this.knowledgeQaPath = knowledgeQaPath;
+    }
+
+    public String getKnowledgeQaHistoryPath() {
+        return knowledgeQaHistoryPath;
+    }
+
+    public void setKnowledgeQaHistoryPath(String knowledgeQaHistoryPath) {
+        this.knowledgeQaHistoryPath = knowledgeQaHistoryPath;
+    }
+
+    public Duration getStreamReadTimeout() {
+        return streamReadTimeout;
+    }
+
+    public void setStreamReadTimeout(Duration streamReadTimeout) {
+        this.streamReadTimeout = streamReadTimeout;
+    }
+
+    public String getInternalToken() {
+        return internalToken;
+    }
+
+    public void setInternalToken(String internalToken) {
+        this.internalToken = internalToken;
     }
 }

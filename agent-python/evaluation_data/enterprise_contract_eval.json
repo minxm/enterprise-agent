@@ -78,11 +78,25 @@
     {
       "case_id": "single-pay-first-step",
       "question": "付款申请的第一步由谁审批？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000001"],
-      "expected_facts": ["部门负责人"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      "expected_facts": [
+        "部门负责人"
+      ],
       "expected_answer": "付款申请须先由部门负责人审批。",
       "should_refuse": false,
-      "description": "单个知识片段即可回答"
+      "description": "单个知识片段即可回答",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "付款申请须先由部门负责人审批，审批通过后才能提交财务。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "multi-pay-flow",
@@ -91,10 +105,25 @@
         "00000000-0000-4000-8000-000000000001",
         "00000000-0000-4000-8000-000000000002"
       ],
-      "expected_facts": ["部门负责人", "两个工作日"],
+      "expected_facts": [
+        "部门负责人",
+        "两个工作日"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "需要多个知识片段共同回答"
+      "description": "需要多个知识片段共同回答",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "付款申请须先由部门负责人审批，审批通过后才能提交财务。",
+        "财务审核通过后，出纳在两个工作日内完成付款。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000002"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "refuse-cafeteria",
@@ -103,25 +132,59 @@
       "expected_facts": [],
       "expected_answer": null,
       "should_refuse": true,
-      "description": "知识库没有答案"
+      "description": "知识库没有答案",
+      "expected_answerable": false,
+      "expected_response_type": "refusal",
+      "expected_claims": [],
+      "expected_evidence": [],
+      "expected_conflict": false,
+      "expected_refusal_reason": "评估语料的 12 条片段都没有记载食堂补贴金额。"
     },
     {
       "case_id": "confuse-contract-threshold",
       "question": "合同金额超过多少必须由总经理审批？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000006"],
-      "expected_facts": ["100 万元"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000006"
+      ],
+      "expected_facts": [
+        "100 万元"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "容易与付款 50 万元阈值混淆"
+      "description": "容易与付款 50 万元阈值混淆",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "合同金额超过 100 万元时，签署前必须经过总经理审批。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000006"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "paraphrase-pay-first",
       "question": "付款想往下走，得先让谁同意？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000001"],
-      "expected_facts": ["部门负责人"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      "expected_facts": [
+        "部门负责人"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "问法不同但语义相同"
+      "description": "问法不同但语义相同",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "付款申请须先由部门负责人审批，审批通过后才能提交财务。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000001"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "multi-condition-large-payment",
@@ -131,10 +194,28 @@
         "00000000-0000-4000-8000-000000000008",
         "00000000-0000-4000-8000-00000000000b"
       ],
-      "expected_facts": ["50 万元", "增值税专用发票", "供应商准入"],
+      "expected_facts": [
+        "50 万元",
+        "增值税专用发票",
+        "供应商准入"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "包含多个条件"
+      "description": "包含多个条件",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "单笔付款金额超过 50 万元时，必须再由总经理审批。",
+        "付款前必须取得增值税专用发票，发票抬头为公司全称。",
+        "向新供应商付款前，必须先完成供应商准入登记。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000003",
+        "00000000-0000-4000-8000-000000000008",
+        "00000000-0000-4000-8000-00000000000b"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "conflict-seal",
@@ -143,19 +224,48 @@
         "00000000-0000-4000-8000-000000000009",
         "00000000-0000-4000-8000-00000000000a"
       ],
-      "expected_facts": ["行政部", "业务部门负责人"],
+      "expected_facts": [
+        "行政部",
+        "业务部门负责人"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "资料存在冲突，应同时看到双方说法"
+      "description": "资料存在冲突，应同时看到双方说法",
+      "expected_answerable": true,
+      "expected_response_type": "conflict",
+      "expected_claims": [
+        "合同盖章由行政部统一办理，业务部门不得自行盖章。",
+        "合同盖章由业务部门负责人在审批完成后直接办理。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000009",
+        "00000000-0000-4000-8000-00000000000a"
+      ],
+      "expected_conflict": true,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "single-legal-duty",
       "question": "法务在合同审核中负责什么？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000004"],
-      "expected_facts": ["条款的合规性"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000004"
+      ],
+      "expected_facts": [
+        "条款的合规性"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "单个知识片段即可回答"
+      "description": "单个知识片段即可回答",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "合同提交后，先由部门负责人审核，再由法务审核条款的合规性。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000004"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "multi-contract-sign",
@@ -164,10 +274,25 @@
         "00000000-0000-4000-8000-000000000004",
         "00000000-0000-4000-8000-000000000005"
       ],
-      "expected_facts": ["法务", "授权签字人"],
+      "expected_facts": [
+        "法务",
+        "授权签字人"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "需要多个知识片段共同回答"
+      "description": "需要多个知识片段共同回答",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "合同提交后，先由部门负责人审核，再由法务审核条款的合规性。",
+        "法务审核通过后，由授权签字人签署合同。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000004",
+        "00000000-0000-4000-8000-000000000005"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "refuse-shuttle",
@@ -176,25 +301,59 @@
       "expected_facts": [],
       "expected_answer": null,
       "should_refuse": true,
-      "description": "知识库没有答案"
+      "description": "知识库没有答案",
+      "expected_answerable": false,
+      "expected_response_type": "refusal",
+      "expected_claims": [],
+      "expected_evidence": [],
+      "expected_conflict": false,
+      "expected_refusal_reason": "评估语料的 12 条片段都没有记载班车发车时间。"
     },
     {
       "case_id": "paraphrase-legal",
       "question": "谁负责看合同条款合不合规？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000004"],
-      "expected_facts": ["合规性"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000004"
+      ],
+      "expected_facts": [
+        "合规性"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "问法不同但语义相同"
+      "description": "问法不同但语义相同",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "合同提交后，先由部门负责人审核，再由法务审核条款的合规性。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000004"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     },
     {
       "case_id": "single-leave-days",
       "question": "入职满一年可以休几天年假？",
-      "expected_chunk_ids": ["00000000-0000-4000-8000-000000000007"],
-      "expected_facts": ["5 天"],
+      "expected_chunk_ids": [
+        "00000000-0000-4000-8000-000000000007"
+      ],
+      "expected_facts": [
+        "5 天"
+      ],
       "expected_answer": null,
       "should_refuse": false,
-      "description": "单个知识片段即可回答"
+      "description": "单个知识片段即可回答",
+      "expected_answerable": true,
+      "expected_response_type": "answer",
+      "expected_claims": [
+        "员工入职满一年后，每年可休年假 5 天。"
+      ],
+      "expected_evidence": [
+        "00000000-0000-4000-8000-000000000007"
+      ],
+      "expected_conflict": false,
+      "expected_refusal_reason": null
     }
   ]
 }

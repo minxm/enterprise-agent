@@ -71,10 +71,13 @@ async def _verify(settings: Settings) -> None:
         assert probe["agent_run_absent"] is True
         assert resources.redis is not None
         assert await resources.redis.ping() == "PONG"
+        assert resources.checkpoints is not None
+        assert resources.checkpoints.saver is not None
     finally:
         await resources.close()
     assert resources.postgres is None
     assert resources.redis is None
+    assert resources.checkpoints is None
 
 
 def _root_env() -> dict[str, str]:

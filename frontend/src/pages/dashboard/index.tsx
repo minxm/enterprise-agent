@@ -10,7 +10,7 @@ const modules = [
   { name: '合同管理', status: '开发中' },
   { name: '智能审核', status: '开发中' },
   { name: '审批中心', status: '开发中' },
-  { name: '知识库', status: '开发中' },
+  { name: '知识库', status: '可用' },
 ];
 
 type StatusTone = 'success' | 'error' | 'processing';

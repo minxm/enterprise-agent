@@ -10,8 +10,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 
-from app.knowledge.retrieval import RetrievalHit
-
 MAX_CONTEXT_CHARS = 8000
 
 SYSTEM_PROMPT = """你是一个企业知识库问答助手。
@@ -32,9 +30,9 @@ SYSTEM_PROMPT = """你是一个企业知识库问答助手。
 INSUFFICIENT_KNOWLEDGE = "当前知识库中没有检索到与该问题相关的资料，暂时无法根据企业知识库提供可靠答案。"
 
 
-def limit_passages(hits: Sequence[RetrievalHit]) -> list[RetrievalHit]:
+def limit_passages(hits: Sequence[object]) -> list[object]:
     """Keep passage text within MAX_CONTEXT_CHARS, preserving retrieval order."""
-    selected: list[RetrievalHit] = []
+    selected: list[object] = []
     used = 0
     for hit in hits:
         remaining = MAX_CONTEXT_CHARS - used
@@ -49,7 +47,7 @@ def limit_passages(hits: Sequence[RetrievalHit]) -> list[RetrievalHit]:
     return selected
 
 
-def build_user_prompt(question: str, hits: Sequence[RetrievalHit]) -> str:
+def build_user_prompt(question: str, hits: Sequence[object]) -> str:
     blocks = [
         f"[{index}]\n来源：文档 {hit.document_id} / 片段 {hit.chunk_index}\n内容：{hit.content}"
         for index, hit in enumerate(hits, start=1)

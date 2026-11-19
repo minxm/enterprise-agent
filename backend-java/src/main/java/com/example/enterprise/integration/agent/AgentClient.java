@@ -1,14 +1,28 @@
 package com.example.enterprise.integration.agent;
 
+import com.example.enterprise.agentgateway.HistoryMessage;
+import com.example.enterprise.agentgateway.HistoryMessages;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.NoRouteToHostException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -16,11 +30,19 @@ import org.springframework.web.client.RestClientException;
 @Component
 public class AgentClient {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentClient.class);
+    private static final String INTERNAL_TOKEN_HEADER = "X-Agent-Token";
+
     private final RestClient agentRestClient;
+    private final RestClient agentStreamRestClient;
     private final AgentServiceProperties properties;
 
-    public AgentClient(RestClient agentRestClient, AgentServiceProperties properties) {
+    public AgentClient(
+            @Qualifier("agentRestClient") RestClient agentRestClient,
+            @Qualifier("agentStreamRestClient") RestClient agentStreamRestClient,
+            AgentServiceProperties properties) {
         this.agentRestClient = agentRestClient;
+        this.agentStreamRestClient = agentStreamRestClient;
         this.properties = properties;
     }
 
@@ -48,6 +70,147 @@ public class AgentClient {
             throw exception;
         } catch (RestClientException exception) {
             throw mapTransportFailure(exception);
+        }
+    }
+
+    public List<HistoryMessage> readKnowledgeQaHistory(UUID tenantId, UUID actorId, UUID conversationId) {
+        String token = properties.getInternalToken();
+        if (token == null || token.isBlank()) {
+            throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务认证未配置");
+        }
+        try {
+            return agentRestClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path(properties.getKnowledgeQaHistoryPath())
+                            .queryParam("tenant_id", tenantId)
+                            .queryParam("actor_id", actorId)
+                            .build(conversationId))
+                    .header(RequestIds.HEADER, RequestIds.current().orElseGet(RequestIds::newId))
+                    .header(INTERNAL_TOKEN_HEADER, token)
+                    .exchange((request, response) -> {
+                        int status = response.getStatusCode().value();
+                        if (status == 404) {
+                            throw new AgentServiceException(HttpStatus.NOT_FOUND, "会话不存在");
+                        }
+                        if (status == 409) {
+                            throw new AgentServiceException(HttpStatus.CONFLICT, "同一个会话正在执行，请等待本次完成后再继续。");
+                        }
+                        if (status == 503) {
+                            throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "工作流状态暂时不可用");
+                        }
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw upstreamStatus(status);
+                        }
+                        HistoryMessages body = response.bodyTo(HistoryMessages.class);
+                        if (body == null || body.messages() == null) {
+                            throw new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务响应无法解析");
+                        }
+                        return body.messages();
+                    });
+        } catch (AgentServiceException exception) {
+            throw exception;
+        } catch (RestClientException exception) {
+            if (exception.getCause() instanceof AgentServiceException agentFailure) {
+                throw agentFailure;
+            }
+            throw mapTransportFailure(exception);
+        }
+    }
+
+    public void writeKnowledgeQaStream(
+            UUID tenantId,
+            UUID actorId,
+            UUID conversationId,
+            String question,
+            Integer topK,
+            String retrievalStrategy,
+            String requestId,
+            HttpServletResponse servletResponse) {
+        String token = properties.getInternalToken();
+        if (token == null || token.isBlank()) {
+            throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务认证未配置");
+        }
+        KnowledgeQaPythonRequest body = new KnowledgeQaPythonRequest(
+                tenantId, actorId, conversationId, question, topK, retrievalStrategy);
+        try {
+            agentStreamRestClient.post()
+                    .uri(properties.getKnowledgeQaPath())
+                    .header(RequestIds.HEADER, requestId)
+                    .header(INTERNAL_TOKEN_HEADER, token)
+                    .header(HttpHeaders.ACCEPT, MediaType.TEXT_EVENT_STREAM_VALUE)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            discard(response.getBody());
+                            throw upstreamStatus(response.getStatusCode().value());
+                        }
+                        copyStream(response.getBody(), servletResponse, requestId);
+                        return null;
+                    });
+        } catch (AgentServiceException exception) {
+            throw exception;
+        } catch (RestClientException exception) {
+            if (exception.getCause() instanceof AgentServiceException agentFailure) {
+                throw agentFailure;
+            }
+            throw mapTransportFailure(exception);
+        }
+    }
+
+    private void copyStream(InputStream input, HttpServletResponse servletResponse, String requestId) {
+        try (InputStream source = input) {
+            byte[] buffer = new byte[512];
+            int read = source.read(buffer);
+            if (read == -1) {
+                prepareSse(servletResponse, requestId);
+                return;
+            }
+            prepareSse(servletResponse, requestId);
+            OutputStream output = servletResponse.getOutputStream();
+            while (read != -1) {
+                output.write(buffer, 0, read);
+                output.flush();
+                servletResponse.flushBuffer();
+                read = source.read(buffer);
+            }
+        } catch (IOException exception) {
+            if (servletResponse.isCommitted()) {
+                log.info("Knowledge QA client disconnected requestId={}", requestId);
+                return;
+            }
+            throw new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务响应无法解析", exception);
+        }
+    }
+
+    private static void prepareSse(HttpServletResponse servletResponse, String requestId) {
+        servletResponse.setStatus(HttpServletResponse.SC_OK);
+        servletResponse.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        servletResponse.setContentType("text/event-stream;charset=UTF-8");
+        servletResponse.setHeader(HttpHeaders.CACHE_CONTROL, "no-cache, no-transform");
+        servletResponse.setHeader(HttpHeaders.CONNECTION, "keep-alive");
+        servletResponse.setHeader("X-Accel-Buffering", "no");
+        servletResponse.setHeader(RequestIds.HEADER, requestId);
+    }
+
+    private static AgentServiceException upstreamStatus(int status) {
+        if (status == 401) {
+            return new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务认证失败");
+        }
+        if (status == 422) {
+            return new AgentServiceException(HttpStatus.BAD_REQUEST, "请求参数不合法");
+        }
+        return new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务返回异常状态");
+    }
+
+    private static void discard(InputStream body) {
+        if (body == null) {
+            return;
+        }
+        try (InputStream source = body) {
+            source.transferTo(OutputStream.nullOutputStream());
+        } catch (IOException ignored) {
+            // The error body is never logged or returned.
         }
     }
 

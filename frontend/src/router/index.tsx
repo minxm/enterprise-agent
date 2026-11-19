@@ -3,6 +3,7 @@ import MainLayout from '../layouts/MainLayout';
 import NotFound from '../pages/NotFound';
 import ComingSoon from '../pages/ComingSoon';
 import DashboardPage from '../pages/dashboard';
+import KnowledgeQaPage from '../pages/knowledge';
 
 export const router = createBrowserRouter([
   {
@@ -14,7 +15,7 @@ export const router = createBrowserRouter([
       { path: 'contracts', element: <ComingSoon name="合同管理" /> },
       { path: 'reviews', element: <ComingSoon name="智能审核" /> },
       { path: 'approvals', element: <ComingSoon name="审批中心" /> },
-      { path: 'knowledge', element: <ComingSoon name="知识库" /> },
+      { path: 'knowledge', element: <KnowledgeQaPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

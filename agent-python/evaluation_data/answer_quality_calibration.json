@@ -1,0 +1,246 @@
+{
+  "dataset_name": "answer-quality-calibration-v1",
+  "preliminary": true,
+  "note": "依据评估语料原文做的初步人工标注，不是生产级 Judge 基准。",
+  "items": [
+    {
+      "item_id": "correct-answer",
+      "question": "付款申请的第一步由谁审批？",
+      "answer": "付款申请须先由部门负责人审批，审批通过后才能提交财务。[1]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "content": "付款申请须先由部门负责人审批，审批通过后才能提交财务。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "answer",
+      "human_reason": "片段原文写明付款申请须先由部门负责人审批，答案没有增加别的规则。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000001"],
+      "human_claims": [
+        {
+          "text": "付款申请须先由部门负责人审批，审批通过后才能提交财务",
+          "verdict": "supported",
+          "supporting_source_ids": ["00000000-0000-4000-8000-000000000001"],
+          "contradicting_source_ids": []
+        }
+      ]
+    },
+    {
+      "item_id": "unsupported-answer",
+      "question": "员工食堂每月补贴多少钱？",
+      "answer": "员工食堂每月补贴 300 元。[1]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "content": "员工入职满一年后，每年可休年假 5 天。"
+        }
+      ],
+      "expected_response_type": "refusal",
+      "human_response_class": "answer",
+      "human_reason": "年假片段没有食堂补贴。300 元不是来源中的事实，也没有被来源明确否定，所以这条结论是证据不足，不应算拒答。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000007"],
+      "human_claims": [
+        {
+          "text": "员工食堂每月补贴 300 元",
+          "verdict": "insufficient",
+          "supporting_source_ids": [],
+          "contradicting_source_ids": []
+        }
+      ]
+    },
+    {
+      "item_id": "citation-contradiction",
+      "question": "付款发票什么时候提供？",
+      "answer": "付款后可以补交发票。[1]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "content": "付款前必须取得增值税专用发票，发票抬头为公司全称。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "answer",
+      "human_reason": "引用编号存在，但来源要求付款前取得增值税专用发票，答案说付款后补交，方向相反。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000008"],
+      "human_claims": [
+        {
+          "text": "付款后可以补交发票",
+          "verdict": "contradicted",
+          "supporting_source_ids": [],
+          "contradicting_source_ids": ["00000000-0000-4000-8000-000000000008"]
+        }
+      ]
+    },
+    {
+      "item_id": "correct-refusal",
+      "question": "公司班车早上几点发车？",
+      "answer": "当前提供的知识片段中没有关于公司班车发车时间的信息，因此无法回答。",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "content": "员工入职满一年后，每年可休年假 5 天。"
+        }
+      ],
+      "expected_response_type": "refusal",
+      "human_response_class": "refusal",
+      "human_reason": "来源只有年假天数。答案没有给出班车时间，只说明片段里没有这项信息。",
+      "evidence_source_ids": [],
+      "human_claims": []
+    },
+    {
+      "item_id": "incorrect-refusal",
+      "question": "入职满一年可以休几天年假？",
+      "answer": "当前知识库资料不足，无法回答。",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000007",
+          "content": "员工入职满一年后，每年可休年假 5 天。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "refusal",
+      "human_reason": "来源已经写明入职满一年每年可休年假 5 天，答案仍表示资料不足。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000007"],
+      "human_claims": []
+    },
+    {
+      "item_id": "conflict",
+      "question": "合同最终由谁盖章？",
+      "answer": "一种说法是合同盖章由行政部统一办理，业务部门不得自行盖章。[1]。另一种说法是合同盖章由业务部门负责人在审批完成后直接办理。[2]。两份资料存在冲突，无法确定唯一办理部门。",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000009",
+          "content": "合同盖章由行政部统一办理，业务部门不得自行盖章。"
+        },
+        {
+          "source_id": "00000000-0000-4000-8000-00000000000a",
+          "content": "合同盖章由业务部门负责人在审批完成后直接办理。"
+        }
+      ],
+      "expected_response_type": "conflict",
+      "human_response_class": "conflict",
+      "human_reason": "两份片段分别指定行政部和业务部门负责人。答案同时列出两边，没有把其中一份当成唯一事实。",
+      "evidence_source_ids": [
+        "00000000-0000-4000-8000-000000000009",
+        "00000000-0000-4000-8000-00000000000a"
+      ],
+      "human_claims": [
+        {
+          "text": "一种说法是合同盖章由行政部统一办理，业务部门不得自行盖章",
+          "verdict": "supported",
+          "supporting_source_ids": ["00000000-0000-4000-8000-000000000009"],
+          "contradicting_source_ids": []
+        },
+        {
+          "text": "另一种说法是合同盖章由业务部门负责人在审批完成后直接办理",
+          "verdict": "supported",
+          "supporting_source_ids": ["00000000-0000-4000-8000-00000000000a"],
+          "contradicting_source_ids": []
+        }
+      ]
+    },
+    {
+      "item_id": "partial-answer",
+      "question": "超过 50 万元付给新供应商时，审批和食堂补贴分别是什么？",
+      "answer": "单笔付款金额超过 50 万元时，必须再由总经理审批。[1]。食堂补贴没有具体说明。",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "content": "单笔付款金额超过 50 万元时，必须再由总经理审批。"
+        }
+      ],
+      "expected_response_type": "partial_answer",
+      "human_response_class": "partial_answer",
+      "human_reason": "来源只写了超过 50 万元须由总经理审批。食堂补贴没有记载，答案只确认了有依据的部分。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000003"],
+      "human_claims": [
+        {
+          "text": "单笔付款金额超过 50 万元时，必须再由总经理审批",
+          "verdict": "supported",
+          "supporting_source_ids": ["00000000-0000-4000-8000-000000000003"],
+          "contradicting_source_ids": []
+        }
+      ]
+    },
+    {
+      "item_id": "insufficiency-with-conclusion",
+      "question": "付款发票什么时候提供？",
+      "answer": "当前知识库资料不足。发票可以在付款后五个工作日内补交。[1]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000008",
+          "content": "付款前必须取得增值税专用发票，发票抬头为公司全称。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "answered_despite_insufficiency",
+      "human_reason": "答案虽然写了资料不足，但仍给出付款后五个工作日内补交。来源要求的是付款前取得发票，这条结论没有依据。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000008"],
+      "human_claims": [
+        {
+          "text": "发票可以在付款后五个工作日内补交",
+          "verdict": "contradicted",
+          "supporting_source_ids": [],
+          "contradicting_source_ids": ["00000000-0000-4000-8000-000000000008"]
+        }
+      ]
+    },
+    {
+      "item_id": "joint-support",
+      "question": "向新供应商付款前要做什么？",
+      "answer": "付款申请须先由部门负责人审批，审批通过后才能提交财务，并且向新供应商付款前必须先完成供应商准入登记。[1][2]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000001",
+          "content": "付款申请须先由部门负责人审批，审批通过后才能提交财务。"
+        },
+        {
+          "source_id": "00000000-0000-4000-8000-00000000000b",
+          "content": "向新供应商付款前，必须先完成供应商准入登记。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "answer",
+      "human_reason": "两个条件分别写在两份片段里。合在一起才能支持这整句，缺任何一份都不构成完整支持。",
+      "evidence_source_ids": [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-00000000000b"
+      ],
+      "human_claims": [
+        {
+          "text": "付款申请须先由部门负责人审批，审批通过后才能提交财务，并且向新供应商付款前必须先完成供应商准入登记",
+          "verdict": "supported",
+          "supporting_source_ids": [
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-00000000000b"
+          ],
+          "contradicting_source_ids": []
+        }
+      ]
+    },
+    {
+      "item_id": "substituted-role",
+      "question": "单笔付款超过 50 万元还要谁审批？",
+      "answer": "金额超过 50 万元的付款需要财务负责人审批。[1]",
+      "sources": [
+        {
+          "source_id": "00000000-0000-4000-8000-000000000003",
+          "content": "单笔付款金额超过 50 万元时，必须再由总经理审批。"
+        }
+      ],
+      "expected_response_type": "answer",
+      "human_response_class": "answer",
+      "human_reason": "来源指定的是总经理。答案改成财务负责人，属于与来源相反，不是知识库里的规则。",
+      "evidence_source_ids": ["00000000-0000-4000-8000-000000000003"],
+      "human_claims": [
+        {
+          "text": "金额超过 50 万元的付款需要财务负责人审批",
+          "verdict": "contradicted",
+          "supporting_source_ids": [],
+          "contradicting_source_ids": ["00000000-0000-4000-8000-000000000003"]
+        }
+      ]
+    }
+  ]
+}
