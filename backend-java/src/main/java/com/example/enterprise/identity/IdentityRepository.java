@@ -151,6 +151,26 @@ public class IdentityRepository {
                 """, userId, roleId, tenantId));
     }
 
+    public boolean userHasPermission(UUID userId, String code) {
+        Integer active = jdbc.queryForObject("""
+                select count(*)
+                from business.app_user
+                where id = ? and status = 'active'
+                """, Integer.class, userId);
+        if (active == null || active == 0) {
+            return false;
+        }
+        Integer count = jdbc.queryForObject("""
+                select count(*)
+                from business.user_role ur
+                join business.role_permission rp
+                  on rp.role_id = ur.role_id and rp.tenant_id = ur.tenant_id
+                join business.permission p on p.id = rp.permission_id
+                where ur.user_id = ? and p.code = ?
+                """, Integer.class, userId, code);
+        return count != null && count > 0;
+    }
+
     public boolean userRoleExists(UUID userId, UUID roleId) {
         Integer count = jdbc.queryForObject("""
                 select count(*)

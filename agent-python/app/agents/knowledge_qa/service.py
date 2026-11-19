@@ -27,6 +27,7 @@ from app.agents.knowledge_qa.builder import build_knowledge_qa_graph
 from app.agents.knowledge_qa.events import public_text
 from app.agents.knowledge_qa.nodes import _failure, format_response, validate_input
 from app.agents.knowledge_qa.threads import ThreadAccessError, ThreadLocks, assert_thread_access, parse_uuid, thread_id_for
+from app.tools.contract_context import bind_actor_ticket, reset_actor_ticket
 from app.core.request_context import current_request_id, reset_request_id, set_request_id
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class KnowledgeQAResult:
 
 
 class KnowledgeQAService:
-    def __init__(self, rag_service: object, *, checkpointer: object | None = None) -> None:
+    def __init__(self, rag_service: object, *, checkpointer: object | None = None, contract_tool: object | None = None) -> None:
         default_top_k = getattr(rag_service, "_default_top_k", 5)
         default_strategy = getattr(rag_service, "_default_strategy", "vector")
         self._default_top_k = default_top_k if isinstance(default_top_k, int) else 5
@@ -85,6 +86,7 @@ class KnowledgeQAService:
         self._locks = ThreadLocks()
         self._graph = build_knowledge_qa_graph(
             rag_service,
+            contract_tool=contract_tool,
             default_top_k=self._default_top_k,
             default_strategy=self._default_strategy,
             checkpointer=checkpointer,
@@ -100,6 +102,23 @@ class KnowledgeQAService:
         requested_intent: str | None = None,
         conversation_id: object = None,
         actor_id: object = None,
+        actor_ticket: str | None = None,
+    ) -> KnowledgeQAResult:
+        ticket = bind_actor_ticket(actor_ticket)
+        try:
+            return self._ask(tenant_id, question, top_k, retrieval_strategy, requested_intent, conversation_id, actor_id)
+        finally:
+            reset_actor_ticket(ticket)
+
+    def _ask(
+        self,
+        tenant_id: object,
+        question: object,
+        top_k: object,
+        retrieval_strategy: str | None,
+        requested_intent: str | None,
+        conversation_id: object,
+        actor_id: object,
     ) -> KnowledgeQAResult:
         payload = _payload(tenant_id, question, top_k, retrieval_strategy, requested_intent)
         if self._checkpointer is None:
@@ -128,6 +147,7 @@ class KnowledgeQAService:
         requested_intent: str | None = None,
         conversation_id: object = None,
         actor_id: object = None,
+        actor_ticket: str | None = None,
         control: RunControl | None = None,
     ) -> Iterator[Event]:
         """Yield workflow events for one trusted call.
@@ -137,6 +157,7 @@ class KnowledgeQAService:
         generator closes, including when the consumer stops early.
         """
         request_id, token = _bind_request_id()
+        ticket = bind_actor_ticket(actor_ticket)
         try:
             payload = _payload(tenant_id, question, top_k, retrieval_strategy, requested_intent)
             if self._checkpointer is None:
@@ -160,6 +181,7 @@ class KnowledgeQAService:
                     return
                 yield from self._play(payload, config, request_id, str(conversation), control)
         finally:
+            reset_actor_ticket(ticket)
             if token is not None:
                 reset_request_id(token)
 

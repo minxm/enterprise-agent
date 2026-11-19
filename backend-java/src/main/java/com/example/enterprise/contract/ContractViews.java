@@ -68,6 +68,30 @@ public final class ContractViews {
     public record CreateVersion(UUID fileId, String changeSummary) {
     }
 
+    public record AgentContractVersion(
+            int versionNo,
+            String versionLabel,
+            String changeSummary,
+            String filename,
+            Instant createdAt) {
+    }
+
+    public record AgentContractSnapshot(
+            String contractNo,
+            String title,
+            String contractType,
+            String counterpartyName,
+            String amount,
+            String currency,
+            LocalDate signDate,
+            LocalDate effectiveDate,
+            LocalDate expiryDate,
+            String status,
+            String statusLabel,
+            String description,
+            AgentContractVersion currentVersion) {
+    }
+
     public record ContractVersionView(
             UUID versionId,
             int versionNo,

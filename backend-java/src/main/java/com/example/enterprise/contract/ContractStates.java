@@ -40,6 +40,10 @@ final class ContractStates {
         return status != null && NEXT.containsKey(status);
     }
 
+    static String label(String status) {
+        return LABELS.getOrDefault(status, status);
+    }
+
     static boolean canEdit(String status) {
         return DRAFT.equals(status) || REJECTED.equals(status);
     }

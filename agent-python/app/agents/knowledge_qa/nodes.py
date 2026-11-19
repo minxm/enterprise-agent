@@ -12,6 +12,7 @@ from uuid import UUID
 
 from langgraph.config import get_stream_writer
 
+from app.agents.knowledge_qa.contract_intent import looks_like_contract_query
 from app.agents.knowledge_qa.events import degradation_category
 from app.agents.knowledge_qa.state import MAX_CONVERSATION_TURNS
 from app.core.request_context import current_request_id
@@ -58,10 +59,13 @@ def validate_input(state: dict[str, object], *, default_top_k: int, default_stra
 
 
 def route_intent(state: dict[str, object]) -> dict[str, object]:
-    """Keep unspecified requests on knowledge QA. Any other explicit intent is unsupported."""
+    """Honor an explicit intent. Otherwise a contract lookup is detected from the question."""
     requested = state.get("requested_intent")
-    intent = "knowledge_qa" if requested in {None, "knowledge_qa"} else "unsupported"
-    return {"intent": intent}
+    if requested == "contract_query" or (requested is None and looks_like_contract_query(state.get("question"))):
+        return {"intent": "contract_query"}
+    if requested in {None, "knowledge_qa"}:
+        return {"intent": "knowledge_qa"}
+    return {"intent": "unsupported"}
 
 
 def knowledge_qa(state: dict[str, object], *, rag_service: object) -> dict[str, object]:

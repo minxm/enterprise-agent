@@ -4,6 +4,7 @@ import com.example.enterprise.agentgateway.HistoryMessage;
 import com.example.enterprise.agentgateway.HistoryMessages;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
+import com.example.enterprise.internal.ActorTicketStore;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,14 +37,17 @@ public class AgentClient {
     private final RestClient agentRestClient;
     private final RestClient agentStreamRestClient;
     private final AgentServiceProperties properties;
+    private final ActorTicketStore tickets;
 
     public AgentClient(
             @Qualifier("agentRestClient") RestClient agentRestClient,
             @Qualifier("agentStreamRestClient") RestClient agentStreamRestClient,
-            AgentServiceProperties properties) {
+            AgentServiceProperties properties,
+            ActorTicketStore tickets) {
         this.agentRestClient = agentRestClient;
         this.agentStreamRestClient = agentStreamRestClient;
         this.properties = properties;
+        this.tickets = tickets;
     }
 
     public AgentHealthResponse health() {
@@ -130,8 +134,9 @@ public class AgentClient {
         if (token == null || token.isBlank()) {
             throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务认证未配置");
         }
+        String actorTicket = tickets.issue(tenantId, actorId);
         KnowledgeQaPythonRequest body = new KnowledgeQaPythonRequest(
-                tenantId, actorId, conversationId, question, topK, retrievalStrategy);
+                tenantId, actorId, conversationId, question, topK, retrievalStrategy, actorTicket);
         try {
             agentStreamRestClient.post()
                     .uri(properties.getKnowledgeQaPath())
@@ -155,24 +160,28 @@ public class AgentClient {
                 throw agentFailure;
             }
             throw mapTransportFailure(exception);
+        } finally {
+            tickets.revoke(actorTicket);
         }
     }
 
     private void copyStream(InputStream input, HttpServletResponse servletResponse, String requestId) {
         try (InputStream source = input) {
             byte[] buffer = new byte[512];
-            int read = source.read(buffer);
+            int read = readUpstream(source, buffer, servletResponse, requestId);
             if (read == -1) {
-                prepareSse(servletResponse, requestId);
+                if (!servletResponse.isCommitted()) {
+                    prepareSse(servletResponse, requestId);
+                }
                 return;
             }
             prepareSse(servletResponse, requestId);
             OutputStream output = servletResponse.getOutputStream();
             while (read != -1) {
-                output.write(buffer, 0, read);
-                output.flush();
-                servletResponse.flushBuffer();
-                read = source.read(buffer);
+                if (!writeClient(output, servletResponse, buffer, read, requestId)) {
+                    return;
+                }
+                read = readUpstream(source, buffer, servletResponse, requestId);
             }
         } catch (IOException exception) {
             if (servletResponse.isCommitted()) {
@@ -181,6 +190,72 @@ public class AgentClient {
             }
             throw new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务响应无法解析", exception);
         }
+    }
+
+    private int readUpstream(
+            InputStream source, byte[] buffer, HttpServletResponse servletResponse, String requestId) {
+        try {
+            return source.read(buffer);
+        } catch (IOException exception) {
+            if (servletResponse.isCommitted()) {
+                finishBrokenStream(servletResponse, requestId);
+                return -1;
+            }
+            throw new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务响应无法解析", exception);
+        }
+    }
+
+    private boolean writeClient(
+            OutputStream output,
+            HttpServletResponse servletResponse,
+            byte[] buffer,
+            int read,
+            String requestId) throws IOException {
+        try {
+            output.write(buffer, 0, read);
+            output.flush();
+            servletResponse.flushBuffer();
+            return true;
+        } catch (IOException exception) {
+            if (servletResponse.isCommitted()) {
+                log.info("Knowledge QA client disconnected requestId={}", requestId);
+                return false;
+            }
+            throw exception;
+        }
+    }
+
+    private void finishBrokenStream(HttpServletResponse servletResponse, String requestId) {
+        try {
+            OutputStream output = servletResponse.getOutputStream();
+            String payload = "event: run_failed\ndata: {\"error_code\":\"agent_stream_interrupted\",\"safe_error_message\":\"Agent 服务响应中断\",\"request_id\":"
+                    + quote(requestId)
+                    + "}\n\n";
+            output.write(payload.getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            servletResponse.flushBuffer();
+        } catch (IOException exception) {
+            log.info("Knowledge QA client disconnected requestId={}", requestId);
+        }
+    }
+
+    private static String quote(String value) {
+        if (value == null) {
+            return "\"\"";
+        }
+        StringBuilder builder = new StringBuilder(value.length() + 2);
+        builder.append('"');
+        for (int i = 0; i < value.length(); i++) {
+            char current = value.charAt(i);
+            if (current == '\\' || current == '"') {
+                builder.append('\\').append(current);
+            } else if (current < 0x20) {
+                builder.append(' ');
+            } else {
+                builder.append(current);
+            }
+        }
+        return builder.append('"').toString();
     }
 
     private static void prepareSse(HttpServletResponse servletResponse, String requestId) {

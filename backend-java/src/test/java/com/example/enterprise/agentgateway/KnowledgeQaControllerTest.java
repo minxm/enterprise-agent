@@ -145,6 +145,42 @@ class KnowledgeQaControllerTest {
     }
 
     @Test
+    void returnsJsonInsteadOfAnEmptyBodyWhenTheBrowserAcceptsOnlySse() throws Exception {
+        doThrow(new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务不可用"))
+                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), any(), any());
+
+        mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
+                        .with(authentication(principal()))
+                        .header(RequestIds.HEADER, "trace-sse-down")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(CONVERSATION, null, null)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value(503))
+                .andExpect(jsonPath("$.message").value("Agent 服务不可用"))
+                .andExpect(jsonPath("$.requestId").value("trace-sse-down"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("Exception"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("actor_ticket"))));
+    }
+
+    @Test
+    void returnsBadGatewayJsonWhenPythonReturnsAnUnexpectedStatus() throws Exception {
+        doThrow(new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务返回异常状态"))
+                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), any(), any());
+
+        mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
+                        .with(authentication(principal()))
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(CONVERSATION, null, null)))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.message").value("Agent 服务返回异常状态"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("sk-"))))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("actor_ticket"))));
+    }
+
+    @Test
     void forwardsARunFailedEventAsSse() throws Exception {
         doAnswer(invocation -> {
             HttpServletResponse response = invocation.getArgument(7);

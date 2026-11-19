@@ -7,6 +7,7 @@ if a client tries to send it.
 
 from __future__ import annotations
 
+import re
 import secrets
 from uuid import UUID
 
@@ -30,6 +31,7 @@ class KnowledgeQaStreamBody(BaseModel):
     question: str
     top_k: int | None = None
     retrieval_strategy: str | None = None
+    actor_ticket: str | None = None
 
     @field_validator("question")
     @classmethod
@@ -51,6 +53,15 @@ class KnowledgeQaStreamBody(BaseModel):
     def strategy_name(cls, value: str | None) -> str | None:
         if value is not None and value not in RAG_RETRIEVAL_STRATEGIES:
             raise ValueError("检索策略不合法")
+        return value
+
+    @field_validator("actor_ticket")
+    @classmethod
+    def ticket_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if re.fullmatch(r"[A-Za-z0-9_-]{20,128}", value) is None:
+            raise ValueError("actor_ticket 不合法")
         return value
 
 
@@ -83,6 +94,8 @@ async def stream_knowledge_qa(
         arguments["top_k"] = body.top_k
     if body.retrieval_strategy is not None:
         arguments["retrieval_strategy"] = body.retrieval_strategy
+    if body.actor_ticket is not None:
+        arguments["actor_ticket"] = body.actor_ticket
     return open_knowledge_qa_sse(service, **arguments)
 
 

@@ -16,7 +16,7 @@ const menuItems = [
   { key: '/contracts', icon: <FileTextOutlined />, label: '合同管理' },
   { key: '/reviews', icon: <AuditOutlined />, label: '智能审核' },
   { key: '/approvals', icon: <CheckSquareOutlined />, label: '审批中心' },
-  { key: '/knowledge', icon: <ReadOutlined />, label: '知识库' },
+  { key: '/knowledge', icon: <ReadOutlined />, label: '知识与合同' },
 ];
 
 export default function MainLayout() {

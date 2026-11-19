@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -60,6 +62,8 @@ class Settings(BaseSettings):
     rag_eval_judge_model: str = CHAT_MODEL_NAME
     rag_eval_judge_timeout_seconds: float = 60
     agent_internal_token: str = ""
+    java_base_url: str = ""
+    java_timeout_seconds: float = 5.0
 
     @model_validator(mode="after")
     def _check_embedding_settings(self) -> "Settings":
@@ -132,6 +136,15 @@ class Settings(BaseSettings):
         if len(token) > 256:
             raise ValueError("AGENT_INTERNAL_TOKEN 过长")
         self.agent_internal_token = token
+        java_url = self.java_base_url.strip().rstrip("/")
+        if java_url:
+            parsed = urlparse(java_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+                raise ValueError("JAVA_BASE_URL 必须是不含账号的 http 或 https 地址")
+        self.java_base_url = java_url
+        java_timeout = self.java_timeout_seconds
+        if isinstance(java_timeout, bool) or not isinstance(java_timeout, (int, float)) or not 0 < float(java_timeout) <= 30:
+            raise ValueError("JAVA_TIMEOUT_SECONDS 必须在 0 到 30 秒之间")
         return self
 
 

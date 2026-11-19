@@ -352,10 +352,10 @@ export default function KnowledgeQaPage() {
   return (
     <Space direction="vertical" size={16} style={{ display: 'flex' }}>
       <Typography.Title level={3} style={{ margin: 0 }}>
-        知识问答
+        知识问答与合同查询
       </Typography.Title>
       <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-        这里展示工作流进度。答案在本轮执行结束后一次返回，不是逐字生成。
+        可以询问知识库，也可以查询合同。例如：查询合同编号 HT-2026-001 的基本信息、当前版本和审批状态。答案在本轮执行结束后一次返回。
       </Typography.Paragraph>
       {token ? null : (
         <Card title="登录">
@@ -413,7 +413,7 @@ export default function KnowledgeQaPage() {
             <Input.TextArea
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
-              placeholder="输入问题"
+              placeholder="输入知识问题，或查询合同编号 HT-2026-001"
               autoSize={{ minRows: 2, maxRows: 4 }}
               disabled={!token || historyLoading}
             />
@@ -457,7 +457,7 @@ function TurnView({ turn, active }: { turn: Turn; active: boolean }) {
         {run.answer ? (
           <div>
             <Typography.Text strong>回答</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0 }}>{run.answer}</Typography.Paragraph>
+            <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{run.answer}</Typography.Paragraph>
           </div>
         ) : null}
         {run.sources.length > 0 ? <SourceList sources={run.sources} /> : null}

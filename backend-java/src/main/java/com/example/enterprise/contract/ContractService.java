@@ -3,6 +3,8 @@ package com.example.enterprise.contract;
 import com.example.enterprise.auth.AuthenticatedUser;
 import com.example.enterprise.contract.ContractRepository.ContractQuery;
 import com.example.enterprise.contract.ContractRepository.ContractRow;
+import com.example.enterprise.contract.ContractViews.AgentContractSnapshot;
+import com.example.enterprise.contract.ContractViews.AgentContractVersion;
 import com.example.enterprise.contract.ContractViews.ContractFileView;
 import com.example.enterprise.contract.ContractViews.ContractPage;
 import com.example.enterprise.contract.ContractViews.ContractVersionView;
@@ -11,6 +13,7 @@ import com.example.enterprise.contract.ContractViews.CreateVersion;
 import com.example.enterprise.contract.ContractViews.LinkFile;
 import com.example.enterprise.contract.ContractViews.WriteContract;
 import com.example.enterprise.file.StoredFileRepository;
+import com.example.enterprise.identity.IdentityService;
 import com.example.enterprise.identity.TenantContext;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -18,24 +21,49 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @Service
 @Profile("dev")
 public class ContractService {
 
     private static final Set<String> FILE_ROLES = Set.of("original", "attachment", "supplement", "other");
+    private static final Pattern AGENT_CONTRACT_NO = Pattern.compile("^[^\\s\\u0000-\\u001f&?#/\\\\%]{1,64}$");
 
     private final ContractRepository contracts;
     private final StoredFileRepository files;
+    private final IdentityService identity;
 
-    public ContractService(ContractRepository contracts, StoredFileRepository files) {
+    public ContractService(ContractRepository contracts, StoredFileRepository files, IdentityService identity) {
         this.contracts = contracts;
         this.files = files;
+        this.identity = identity;
+    }
+
+    @Transactional
+    public AgentContractSnapshot queryForAgent(AuthenticatedUser user, String contractNo) {
+        String number = required(contractNo, 64);
+        if (!AGENT_CONTRACT_NO.matcher(number).matches()) {
+            throw new ContractException(HttpStatus.BAD_REQUEST, "合同编号不合法");
+        }
+        UUID tenantId = openTenant(user);
+        if (!identity.hasPermission(user.userId(), "contract:read")) {
+            throw new ContractException(HttpStatus.FORBIDDEN, "无权查询合同");
+        }
+        ContractQuery query = new ContractQuery(tenantId, number, null, null, null, null, null, null);
+        List<ContractView> items = contracts.list(query, 2, 0);
+        if (items.size() != 1) {
+            throw new ContractException(HttpStatus.NOT_FOUND, "合同不存在");
+        }
+        ContractView view = items.get(0);
+        ContractVersionView current = contracts.findCurrentVersion(tenantId, view.id()).orElse(null);
+        return toAgentSnapshot(view, current);
     }
 
     @Transactional
@@ -269,6 +297,29 @@ public class ContractService {
             throw new ContractException(HttpStatus.BAD_REQUEST, "请求参数不合法");
         }
         return value.trim();
+    }
+
+    private static AgentContractSnapshot toAgentSnapshot(ContractView view, ContractVersionView version) {
+        AgentContractVersion current = version == null ? null : new AgentContractVersion(
+                version.versionNo(),
+                version.versionLabel(),
+                version.changeSummary(),
+                version.filename(),
+                version.createdAt());
+        return new AgentContractSnapshot(
+                view.contractNo(),
+                view.title(),
+                view.contractType(),
+                view.counterpartyName(),
+                view.amount().setScale(2, RoundingMode.HALF_UP).toPlainString(),
+                view.currency(),
+                view.signDate(),
+                view.effectiveDate(),
+                view.expiryDate(),
+                view.status(),
+                ContractStates.label(view.status()),
+                view.description(),
+                current);
     }
 
     private static String blankToNull(String value) {

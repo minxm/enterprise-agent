@@ -104,6 +104,15 @@ public class IdentityService {
     }
 
     @Transactional
+    public boolean hasPermission(UUID userId, String code) {
+        openTenant();
+        if (code == null || code.isBlank()) {
+            return false;
+        }
+        return repository.userHasPermission(userId, code);
+    }
+
+    @Transactional
     public AssociationCheck checkUserRole(UUID userId, UUID roleId) {
         UUID tenantId = openTenant();
         if (!"active".equals(requireTenant(tenantId).status())) {

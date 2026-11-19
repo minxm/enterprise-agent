@@ -7,6 +7,9 @@ import com.example.enterprise.agentgateway.HistorySource;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
 import com.example.enterprise.config.RestClientConfig;
+import com.example.enterprise.internal.ActorTicketStore;
+import jakarta.servlet.ServletOutputStream;
+import jakarta.servlet.WriteListener;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -221,6 +224,7 @@ class AgentClientTest {
         assertThat(body).contains("\"actor_id\":\"" + actorId + "\"");
         assertThat(body).contains("\"conversation_id\":\"" + conversationId + "\"");
         assertThat(body).contains("付款由谁审批？");
+        assertThat(body).contains("\"actor_ticket\":");
         assertThat(body).doesNotContain("thread_id");
         assertThat(request.getPath()).isEqualTo("/internal/v1/knowledge-qa/stream");
         String forwarded = text(response);
@@ -233,15 +237,84 @@ class AgentClientTest {
 
     @Test
     void returnsASafeErrorWhenPythonIsDown() {
-        AgentClient client = streamClient("http://127.0.0.1:1", "gateway-test-token");
+        ActorTicketStore tickets = new ActorTicketStore();
+        AgentClient client = streamClient("http://127.0.0.1:1", "gateway-test-token", tickets);
+        MockHttpServletResponse response = new MockHttpServletResponse();
 
         assertThatThrownBy(() -> client.writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-down", new MockHttpServletResponse()))
+                "问题", null, null, "trace-down", response))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("Agent 服务不可用")
                 .extracting(exception -> ((AgentServiceException) exception).getStatus())
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getContentAsByteArray()).isEmpty();
+        assertThat(tickets.size()).isZero();
+    }
+
+    @Test
+    void appendsRunFailedWhenPythonClosesAfterTheStreamStarts() throws Exception {
+        ActorTicketStore tickets = new ActorTicketStore();
+        try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            Thread serverThread = new Thread(() -> serveOneChunkThenClose(socket));
+            serverThread.start();
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            streamClient("http://127.0.0.1:" + socket.getLocalPort(), "gateway-test-token", tickets)
+                    .writeKnowledgeQaStream(
+                            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                            "问题", null, null, "trace-cut", response);
+            serverThread.join(5000);
+            String forwarded = text(response);
+            assertThat(forwarded).contains("event: run_started");
+            assertThat(forwarded).contains("event: run_failed");
+            assertThat(forwarded).contains("\"error_code\":\"agent_stream_interrupted\"");
+            assertThat(forwarded).contains("Agent 服务响应中断");
+            assertThat(forwarded).doesNotContain("Exception");
+            assertThat(forwarded).doesNotContain("actor_ticket");
+            assertThat(tickets.size()).isZero();
+        }
+    }
+
+    @Test
+    void clearsTheTicketWhenTheClientDisconnects() throws Exception {
+        ActorTicketStore tickets = new ActorTicketStore();
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: run_started\ndata: {\"request_id\":\"trace-drop\"}\n\n"
+                        + "event: message\ndata: {\"answer\":\"still going\"}\n\n"));
+        MockHttpServletResponse response = new MockHttpServletResponse() {
+            @Override
+            public ServletOutputStream getOutputStream() {
+                ServletOutputStream delegate = super.getOutputStream();
+                return new ServletOutputStream() {
+                    @Override
+                    public boolean isReady() {
+                        return true;
+                    }
+
+                    @Override
+                    public void setWriteListener(WriteListener listener) {
+                    }
+
+                    @Override
+                    public void write(int value) throws IOException {
+                        if (isCommitted()) {
+                            throw new IOException("client closed");
+                        }
+                        delegate.write(value);
+                    }
+                };
+            }
+        };
+
+        streamClient(server.url("/").toString(), "gateway-test-token", tickets).writeKnowledgeQaStream(
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "问题", null, null, "trace-drop", response);
+
+        assertThat(tickets.size()).isZero();
+        assertThat(text(response)).contains("event: run_started");
+        assertThat(text(response)).doesNotContain("agent_stream_interrupted");
+        assertThat(text(response)).doesNotContain("Exception");
     }
 
     @Test
@@ -339,10 +412,14 @@ class AgentClientTest {
         properties.setInternalToken(token);
 
         RestClient restClient = RestClientConfig.create(baseUrl, connectTimeout, readTimeout);
-        return new AgentClient(restClient, restClient, properties);
+        return new AgentClient(restClient, restClient, properties, new ActorTicketStore());
     }
 
     private AgentClient streamClient(String baseUrl, String token) {
+        return streamClient(baseUrl, token, new ActorTicketStore());
+    }
+
+    private AgentClient streamClient(String baseUrl, String token, ActorTicketStore tickets) {
         AgentServiceProperties properties = new AgentServiceProperties();
         properties.setBaseUrl(baseUrl);
         properties.setHealthPath("/api/v1/health");
@@ -353,7 +430,31 @@ class AgentClientTest {
         properties.setInternalToken(token);
         RestClient health = RestClientConfig.create(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(1));
         RestClient stream = RestClientConfig.create(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(5));
-        return new AgentClient(health, stream, properties);
+        return new AgentClient(health, stream, properties, tickets);
+    }
+
+    private static void serveOneChunkThenClose(ServerSocket socket) {
+        try (Socket client = socket.accept()) {
+            client.setSoTimeout(5000);
+            InputStream input = client.getInputStream();
+            ByteArrayOutputStream header = new ByteArrayOutputStream();
+            while (!header.toString(StandardCharsets.ISO_8859_1).contains("\r\n\r\n")) {
+                int value = input.read();
+                if (value < 0) {
+                    return;
+                }
+                header.write(value);
+            }
+            readRequestBody(input, header.toString(StandardCharsets.ISO_8859_1));
+            OutputStream output = client.getOutputStream();
+            output.write(("HTTP/1.1 200 OK\r\n"
+                    + "Content-Type: text/event-stream;charset=UTF-8\r\n"
+                    + "Transfer-Encoding: chunked\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            writeChunk(output, "event: run_started\ndata: {\"request_id\":\"trace-cut\"}\n\n");
+            output.flush();
+        } catch (Exception ignored) {
+            // Closing the socket is the upstream failure under test.
+        }
     }
 
     private static void serveTwoChunks(

@@ -11,5 +11,6 @@ public record KnowledgeQaPythonRequest(
         @JsonProperty("conversation_id") UUID conversationId,
         String question,
         @JsonProperty("top_k") Integer topK,
-        @JsonProperty("retrieval_strategy") String retrievalStrategy) {
+        @JsonProperty("retrieval_strategy") String retrievalStrategy,
+        @JsonProperty("actor_ticket") String actorTicket) {
 }
