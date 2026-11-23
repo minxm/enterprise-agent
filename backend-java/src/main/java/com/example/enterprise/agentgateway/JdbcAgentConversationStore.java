@@ -9,7 +9,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class JdbcAgentConversationStore implements AgentConversationStore {
 
     private final JdbcTemplate jdbc;

@@ -10,6 +10,9 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -18,10 +21,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -31,7 +37,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Real PostgreSQL. The agent token and ticket are test values. MinIO is not used;
  * the version file row is inserted as metadata only.
  */
-@SpringBootTest(properties = "agent.service.internal-token=test-internal-token")
+@SpringBootTest(properties = {
+        "agent.service.internal-token=test-internal-token",
+        "enterprise.actor-ticket.prefix=actor-ticket:contract-test:"
+})
 @ActiveProfiles("dev")
 @AutoConfigureMockMvc
 @Transactional
@@ -39,6 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class InternalContractQueryTest {
 
     private static final String TOKEN = "test-internal-token";
+    private static final String TICKET_PREFIX = "actor-ticket:contract-test:";
     private static final String PASSWORD = "plain-secret-day33";
     private static final String OBJECT_KEY = "secret-object-key-should-not-leak";
     private static final String CHECKSUM = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -50,6 +60,9 @@ class InternalContractQueryTest {
     private ActorTicketStore tickets;
 
     @Autowired
+    private StringRedisTemplate redis;
+
+    @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
@@ -59,6 +72,7 @@ class InternalContractQueryTest {
     void clear() {
         TenantContext.clear();
         SecurityContextHolder.clearContext();
+        deleteTicketKeys();
     }
 
     @Test
@@ -143,14 +157,16 @@ class InternalContractQueryTest {
         UserView stranger = identity.createUser("stranger-" + suffix, PASSWORD, "stranger");
         TenantContext.clear();
 
+        String ticket = tickets.issue(owner.tenant().id(), stranger.id());
         String body = mockMvc.perform(get("/internal/v1/contracts")
                         .param("contractNo", "HT-2026-001")
                         .header("X-Agent-Token", TOKEN)
-                        .header("X-Actor-Ticket", tickets.issue(owner.tenant().id(), stranger.id())))
+                        .header("X-Actor-Ticket", ticket))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message").value("无权查询合同"))
                 .andReturn().getResponse().getContentAsString();
         assertFalse(body.contains("机密标题不应出现"));
+        assertTrue(tickets.consume(ticket).isEmpty());
     }
 
     @Test
@@ -176,6 +192,7 @@ class InternalContractQueryTest {
                         .header("X-Agent-Token", TOKEN))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.message").value("未认证"));
+        assertEquals(reader.user().id(), tickets.consume(ticket).orElseThrow().actorId());
     }
 
     @Test
@@ -287,6 +304,17 @@ class InternalContractQueryTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"" + target + "\"}"))
                 .andExpect(status().isOk());
+    }
+
+    private void deleteTicketKeys() {
+        List<String> keys = new ArrayList<>();
+        ScanOptions options = ScanOptions.scanOptions().match(TICKET_PREFIX + "*").count(100).build();
+        try (Cursor<String> cursor = redis.scan(options)) {
+            cursor.forEachRemaining(keys::add);
+        }
+        if (!keys.isEmpty()) {
+            redis.delete(keys);
+        }
     }
 
     private int contractCount(UUID tenantId) {

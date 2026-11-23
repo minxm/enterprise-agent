@@ -71,12 +71,31 @@ cd D:\enterprise-agent\agent-python
 
 Swagger：`http://127.0.0.1:8000/docs`
 
+## Python 生产启动
+
+生产配置使用现有环境变量，不另建配置文件。在加载仓库根目录 `.env` 后设置：
+
+```powershell
+$env:APP_ENV = "prod"
+$env:ENTERPRISE_INFRA_ENABLED = "true"
+cd D:\enterprise-agent\agent-python
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+```
+
+不要加 `--reload`。进程只监听 `127.0.0.1`，不直接对公网暴露。`APP_ENV=prod` 时必须启用基础设施，业务库账号是 `agent_app`，迁移账号是 `agent_migrator`，两者不能相同，也不能是 PostgreSQL 超级用户。`AGENT_INTERNAL_TOKEN` 必须与 Java 使用同一个非空值。模型密钥可以暂缺，服务可以启动，但健康响应里的模型状态是 `unavailable`，不会为了检查密钥去调用外部模型。
+
+`/api/v1/health` 表示进程存活，Java 现有健康检查继续读取 `status=ok`。`/api/v1/ready` 表示 PostgreSQL、Redis、Checkpointer 和 MemoryService 是否可用；数据库不可用时返回 503。生产模式关闭 `/docs`、`/redoc` 和 `/openapi.json`。
+
+当前版本不支持安全的多 Worker 横向扩容。`ThreadLocks` 只保护同一个进程里的同一个对话线程。多个 Worker 或多个实例不共享这把锁。PostgreSQL Checkpointer 可以跨进程保存状态，但这不表示并发写入自动安全。Python 的 Redis 连接仍只用于启动和就绪检查。Java 用同一个 Redis 实例共享 Actor Ticket：键是 `actor-ticket:v1:` 加票据的 SHA-256，值只有租户和用户标识，TTL 180 秒。签发是 `SET NX EX`，消费是 `GETDEL`，撤销是 `DEL`。Redis 不可用时这些操作失败关闭，不回退到进程内 Map。现有 `REDIS_HOST`、`REDIS_PORT` 和 `REDIS_PASSWORD` 继续使用，命令超时是 `spring.data.redis.timeout`（2 秒）。单节点 AOF `everysec` 在崩溃或主从切换时可能短暂重放已删除的票据。生产应用启动时不再执行迁移，只核对 `agent.schema_migrations`。开发环境在基础设施启用时仍会于启动时迁移。独立迁移命令和顺序见 [数据库迁移](../operations/database-migration.md)。
+
 ## 启动 Java
 
 ```powershell
 cd D:\enterprise-agent\backend-java
 mvn spring-boot:run
 ```
+
+这是开发启动，会在进程内执行 Flyway。正式 prod 不在启动时迁移，要先运行独立迁移任务。命令和失败处理见 [数据库迁移](../operations/database-migration.md)。
 
 默认端口 8080。Python 地址写在 `src/main/resources/application.yml`：
 

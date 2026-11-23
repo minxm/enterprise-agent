@@ -17,7 +17,7 @@ import java.io.IOException;
  * 请求结束时清理租户上下文，避免线程池复用串租户。不读取客户端传来的租户参数。
  */
 @Component
-@Profile("dev")
+@Profile({"dev", "prod"})
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class TenantContextFilter extends OncePerRequestFilter {
 

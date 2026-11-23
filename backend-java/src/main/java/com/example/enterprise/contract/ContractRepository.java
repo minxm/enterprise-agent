@@ -22,7 +22,7 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 @Repository
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class ContractRepository {
 
     private final JdbcTemplate jdbc;

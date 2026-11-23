@@ -11,6 +11,7 @@ const modules = [
   { name: '智能审核', status: '开发中' },
   { name: '审批中心', status: '开发中' },
   { name: '知识与合同', status: '可用' },
+  { name: '长期记忆', status: '可用' },
 ];
 
 type StatusTone = 'success' | 'error' | 'processing';

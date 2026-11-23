@@ -1,5 +1,7 @@
 package com.example.enterprise.internal;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -17,8 +19,11 @@ import com.example.enterprise.config.SecurityConfig;
 import com.example.enterprise.contract.ContractExceptionHandler;
 import com.example.enterprise.contract.ContractService;
 import com.example.enterprise.contract.ContractViews.AgentContractSnapshot;
+import com.example.enterprise.internal.ActorTicketStore.Grant;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -30,7 +35,12 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(InternalContractController.class)
 @ActiveProfiles("dev")
-@Import({ContractExceptionHandler.class, SecurityConfig.class, ActorTicketStore.class, RestClientConfig.class})
+@Import({
+        ContractExceptionHandler.class,
+        SecurityConfig.class,
+        RestClientConfig.class,
+        InternalContractControllerTest.MemoryTickets.class
+})
 @TestPropertySource(properties = {
         "agent.service.base-url=http://127.0.0.1:9",
         "agent.service.health-path=/api/v1/health",
@@ -64,11 +74,15 @@ class InternalContractControllerTest {
         mockMvc.perform(get("/internal/v1/contracts").param("contractNo", "HT-2026-001"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.message").value("未认证"));
+        String ticket = tickets.issue(TENANT, ACTOR);
         mockMvc.perform(get("/internal/v1/contracts")
                         .param("contractNo", "HT-2026-001")
                         .header("X-Agent-Token", "wrong-token")
-                        .header("X-Actor-Ticket", tickets.issue(TENANT, ACTOR)))
+                        .header("X-Actor-Ticket", ticket))
                 .andExpect(status().isUnauthorized());
+        Grant grant = tickets.consume(ticket).orElseThrow();
+        assertEquals(TENANT, grant.tenantId());
+        assertEquals(ACTOR, grant.actorId());
         verifyNoInteractions(contracts);
     }
 
@@ -84,13 +98,15 @@ class InternalContractControllerTest {
 
     @Test
     void identityParametersAreRejected() throws Exception {
+        String ticket = tickets.issue(TENANT, ACTOR);
         mockMvc.perform(get("/internal/v1/contracts")
                         .param("contractNo", "HT-2026-001")
                         .param("tenantId", TENANT.toString())
                         .header("X-Agent-Token", "test-internal-token")
-                        .header("X-Actor-Ticket", tickets.issue(TENANT, ACTOR)))
+                        .header("X-Actor-Ticket", ticket))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("请求参数不合法"));
+        assertTrue(tickets.consume(ticket).isPresent());
         verifyNoInteractions(contracts);
     }
 
@@ -163,6 +179,14 @@ class InternalContractControllerTest {
                 "待审核",
                 null,
                 new com.example.enterprise.contract.ContractViews.AgentContractVersion(
-                        1, "V1", "首版", "采购合同.pdf", java.time.Instant.parse("2026-11-19T02:00:00Z")));
+                        1, "V1", "首版", "采购合同.pdf",                         java.time.Instant.parse("2026-11-19T02:00:00Z")));
+    }
+
+    @TestConfiguration
+    static class MemoryTickets {
+        @Bean
+        ActorTicketStore actorTicketStore() {
+            return ActorTicketStores.memory();
+        }
     }
 }

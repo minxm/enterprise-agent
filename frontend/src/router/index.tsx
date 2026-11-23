@@ -4,6 +4,7 @@ import NotFound from '../pages/NotFound';
 import ComingSoon from '../pages/ComingSoon';
 import DashboardPage from '../pages/dashboard';
 import KnowledgeQaPage from '../pages/knowledge';
+import MemoryPage from '../pages/memory';
 
 export const router = createBrowserRouter([
   {
@@ -16,6 +17,7 @@ export const router = createBrowserRouter([
       { path: 'reviews', element: <ComingSoon name="智能审核" /> },
       { path: 'approvals', element: <ComingSoon name="审批中心" /> },
       { path: 'knowledge', element: <KnowledgeQaPage /> },
+      { path: 'memories', element: <MemoryPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

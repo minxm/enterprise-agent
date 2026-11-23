@@ -15,6 +15,7 @@ from time import perf_counter
 from uuid import UUID
 
 from app.core.config import RAG_FAILURE_POLICIES, RAG_RETRIEVAL_STRATEGIES, RERANKER_MAX_CANDIDATES
+from app.core.log_safety import diagnostic
 from app.knowledge.reranker import RerankAPIError, RerankResponseError
 
 logger = logging.getLogger(__name__)
@@ -226,10 +227,7 @@ def _component_seconds(timing: object, kind: str, fallback: float | None) -> flo
 
 
 def _safe_reason(exc: Exception) -> str:
-    text = f"{exc.__class__.__name__}: {exc}".replace("\n", " ").strip()
-    if len(text) > 200:
-        text = text[:200]
-    return text
+    return diagnostic(exc)
 
 
 def _optional_int(value: object) -> int | None:

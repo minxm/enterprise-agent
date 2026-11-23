@@ -42,6 +42,23 @@ def test_sql_splitter_keeps_text_inside_quotes():
     assert statements == ["select ';'", "select 1"]
 
 
+def test_sql_splitter_keeps_semicolons_inside_dollar_quotes():
+    script = (
+        "create function agent.example() returns trigger language plpgsql as $fn$\n"
+        "begin\n"
+        "  raise exception 'no';\n"
+        "end;\n"
+        "$fn$;\n"
+        "select 1;"
+    )
+
+    statements = _split_sql(script)
+
+    assert len(statements) == 2
+    assert "raise exception 'no';" in statements[0]
+    assert statements[1] == "select 1"
+
+
 def test_knowledge_migration_does_not_touch_business_or_vectors():
     script = Path(__file__).resolve().parents[1].joinpath("migrations", "001_knowledge.sql")
     sql = script.read_text(encoding="utf-8").lower()

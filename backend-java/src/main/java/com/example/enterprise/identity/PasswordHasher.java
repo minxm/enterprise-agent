@@ -6,7 +6,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Component;
 
 @Component
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class PasswordHasher {
 
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();

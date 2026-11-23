@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
  * request are rejected.
  */
 @RestController
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequestMapping("/internal/v1/contracts")
 public class InternalContractController {
 

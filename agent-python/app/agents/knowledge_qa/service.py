@@ -25,7 +25,10 @@ from psycopg_pool import PoolClosed, PoolTimeout
 
 from app.agents.knowledge_qa.builder import build_knowledge_qa_graph
 from app.agents.knowledge_qa.events import public_text
+from app.agents.knowledge_qa.intent import RECALL_INTENTS, classify_intent
 from app.agents.knowledge_qa.nodes import _failure, format_response, validate_input
+from app.agents.knowledge_qa.run_context import RunContext
+from app.memory.context import MemoryAccessContext
 from app.agents.knowledge_qa.threads import ThreadAccessError, ThreadLocks, assert_thread_access, parse_uuid, thread_id_for
 from app.tools.contract_context import bind_actor_ticket, reset_actor_ticket
 from app.core.request_context import current_request_id, reset_request_id, set_request_id
@@ -76,12 +79,20 @@ class KnowledgeQAResult:
 
 
 class KnowledgeQAService:
-    def __init__(self, rag_service: object, *, checkpointer: object | None = None, contract_tool: object | None = None) -> None:
+    def __init__(
+        self,
+        rag_service: object,
+        *,
+        checkpointer: object | None = None,
+        contract_tool: object | None = None,
+        memory: object | None = None,
+    ) -> None:
         default_top_k = getattr(rag_service, "_default_top_k", 5)
         default_strategy = getattr(rag_service, "_default_strategy", "vector")
         self._default_top_k = default_top_k if isinstance(default_top_k, int) else 5
         self._default_strategy = default_strategy if isinstance(default_strategy, str) else "vector"
         self._rag = rag_service
+        self._memory = memory
         self._checkpointer = checkpointer
         self._locks = ThreadLocks()
         self._graph = build_knowledge_qa_graph(
@@ -103,10 +114,20 @@ class KnowledgeQAService:
         conversation_id: object = None,
         actor_id: object = None,
         actor_ticket: str | None = None,
+        allow_tenant_read: bool = False,
     ) -> KnowledgeQAResult:
         ticket = bind_actor_ticket(actor_ticket)
         try:
-            return self._ask(tenant_id, question, top_k, retrieval_strategy, requested_intent, conversation_id, actor_id)
+            return self._ask(
+                tenant_id,
+                question,
+                top_k,
+                retrieval_strategy,
+                requested_intent,
+                conversation_id,
+                actor_id,
+                allow_tenant_read,
+            )
         finally:
             reset_actor_ticket(ticket)
 
@@ -119,13 +140,14 @@ class KnowledgeQAService:
         requested_intent: str | None,
         conversation_id: object,
         actor_id: object,
+        allow_tenant_read: bool,
     ) -> KnowledgeQAResult:
         payload = _payload(tenant_id, question, top_k, retrieval_strategy, requested_intent)
-        if self._checkpointer is None:
-            return self._invoke(payload, None)
         tenant = parse_uuid(tenant_id)
-        conversation = parse_uuid(conversation_id)
         actor = parse_uuid(actor_id) if actor_id is not None else None
+        if self._checkpointer is None:
+            return self._invoke(payload, None, self._recall_context(payload, tenant, actor, allow_tenant_read))
+        conversation = parse_uuid(conversation_id)
         if tenant is None or conversation is None or (actor_id is not None and actor is None):
             return self._reject_scope(payload, tenant, conversation, actor_id, actor)
         with self._open_thread(tenant, conversation, actor) as (kind, config):
@@ -135,7 +157,7 @@ class KnowledgeQAService:
                 return _checkpoint_unavailable()
             if kind == "forbidden":
                 return _result(_failure("failed", "thread_forbidden", "无权访问该会话。"))
-            return self._invoke(payload, config)
+            return self._invoke(payload, config, self._recall_context(payload, tenant, actor, allow_tenant_read))
 
     def stream_events(
         self,
@@ -148,6 +170,7 @@ class KnowledgeQAService:
         conversation_id: object = None,
         actor_id: object = None,
         actor_ticket: str | None = None,
+        allow_tenant_read: bool = False,
         control: RunControl | None = None,
     ) -> Iterator[Event]:
         """Yield workflow events for one trusted call.
@@ -160,12 +183,13 @@ class KnowledgeQAService:
         ticket = bind_actor_ticket(actor_ticket)
         try:
             payload = _payload(tenant_id, question, top_k, retrieval_strategy, requested_intent)
-            if self._checkpointer is None:
-                yield from self._play(payload, None, request_id, _conversation_text(conversation_id), control)
-                return
             tenant = parse_uuid(tenant_id)
-            conversation = parse_uuid(conversation_id)
             actor = parse_uuid(actor_id) if actor_id is not None else None
+            if self._checkpointer is None:
+                context = self._recall_context(payload, tenant, actor, allow_tenant_read)
+                yield from self._play(payload, None, request_id, _conversation_text(conversation_id), control, context)
+                return
+            conversation = parse_uuid(conversation_id)
             if tenant is None or conversation is None or (actor_id is not None and actor is None):
                 yield from self._play_rejection(payload, tenant, conversation, actor_id, actor, request_id)
                 return
@@ -179,7 +203,8 @@ class KnowledgeQAService:
                 if kind == "forbidden":
                     yield _failed(request_id, "thread_forbidden", "无权访问该会话。")
                     return
-                yield from self._play(payload, config, request_id, str(conversation), control)
+                context = self._recall_context(payload, tenant, actor, allow_tenant_read)
+                yield from self._play(payload, config, request_id, str(conversation), control, context)
         finally:
             reset_actor_ticket(ticket)
             if token is not None:
@@ -263,6 +288,7 @@ class KnowledgeQAService:
         request_id: str,
         conversation_id: str | None,
         control: RunControl | None,
+        run_context: RunContext,
     ) -> Iterator[Event]:
         finished = False
         try:
@@ -275,6 +301,7 @@ class KnowledgeQAService:
                     stream_kwargs["durability"] = "sync"
                 if control is not None:
                     stream_kwargs["control"] = control
+                stream_kwargs["context"] = run_context
                 for item in self._graph.stream(payload, config, **stream_kwargs):
                     if not isinstance(item, tuple) or len(item) != 2:
                         continue
@@ -378,12 +405,60 @@ class KnowledgeQAService:
             lock.release()
             logger.info("knowledge qa thread lock released threadId=%s", thread_id)
 
-    def _invoke(self, payload: dict[str, object], config: dict[str, object] | None) -> KnowledgeQAResult:
+    def _invoke(
+        self,
+        payload: dict[str, object],
+        config: dict[str, object] | None,
+        run_context: RunContext,
+    ) -> KnowledgeQAResult:
         try:
-            state = self._graph.invoke(payload, config)
+            state = self._graph.invoke(payload, config, context=run_context)
         except _CHECKPOINT_ERRORS:
             return _checkpoint_unavailable()
         return _result(state)
+
+    def _recall_context(
+        self,
+        payload: dict[str, object],
+        tenant: UUID | None,
+        actor: UUID | None,
+        allow_tenant_read: object,
+    ) -> RunContext:
+        """Recall before the graph starts. Failures continue with an empty context.
+
+        allow_tenant_write is always false. Recall is not a management operation.
+        The snapshot is not refreshed if a memory changes while this run is in flight.
+        """
+        preview = validate_input(
+            payload,
+            default_top_k=self._default_top_k,
+            default_strategy=self._default_strategy,
+        )
+        if preview.get("status") == "invalid_input":
+            return RunContext()
+        intent = classify_intent(preview.get("requested_intent"), preview.get("question"))
+        if intent not in RECALL_INTENTS or self._memory is None or tenant is None or actor is None:
+            return RunContext()
+        granted = allow_tenant_read if type(allow_tenant_read) is bool else False
+        try:
+            access = MemoryAccessContext.for_trusted_caller(
+                tenant_id=tenant,
+                actor_id=actor,
+                allow_tenant_read=granted,
+                allow_tenant_write=False,
+                request_id=current_request_id(),
+            )
+            snippets = self._memory.recall(access)  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.warning("memory recall skipped error=%s", exc.__class__.__name__)
+            return RunContext()
+        lines: list[str] = []
+        for item in snippets or ():
+            content = getattr(item, "content", None)
+            if type(content) is str and content.strip():
+                lines.append(content)
+        logger.info("memory recall ready intent=%s count=%s", intent, len(lines))
+        return RunContext(memories=tuple(lines))
 
 
 def _payload(

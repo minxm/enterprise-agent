@@ -57,6 +57,11 @@ ALTER DEFAULT PRIVILEGES FOR ROLE business_migrator IN SCHEMA business
 ALTER DEFAULT PRIVILEGES FOR ROLE business_migrator IN SCHEMA business
     GRANT USAGE, SELECT ON SEQUENCES TO business_app;
 
+-- Those table defaults also cover business.flyway_schema_history when Flyway
+-- creates it. database/postgres/privileges/business_flyway_history.sql then
+-- leaves business_app with SELECT only. Run that script as business_migrator.
+-- It is not a Flyway version. Existing volumes do not re-run this init script.
+
 ALTER DEFAULT PRIVILEGES FOR ROLE agent_migrator IN SCHEMA agent
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO agent_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE agent_migrator IN SCHEMA agent

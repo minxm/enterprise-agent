@@ -24,9 +24,11 @@ class Settings(BaseSettings):
         env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     app_name: str = "Enterprise Agent Runtime"
+    app_env: str = "dev"
     api_prefix: str = "/api/v1"
     postgres_host: str = ""
     postgres_port: int = 5432
@@ -145,7 +147,38 @@ class Settings(BaseSettings):
         java_timeout = self.java_timeout_seconds
         if isinstance(java_timeout, bool) or not isinstance(java_timeout, (int, float)) or not 0 < float(java_timeout) <= 30:
             raise ValueError("JAVA_TIMEOUT_SECONDS 必须在 0 到 30 秒之间")
+        self._check_runtime_mode()
         return self
+
+    def _check_runtime_mode(self) -> None:
+        env_name = self.app_env.strip().lower()
+        if env_name not in {"dev", "prod"}:
+            raise ValueError("APP_ENV 必须是 dev 或 prod")
+        self.app_env = env_name
+        if env_name != "prod":
+            return
+        if self.enterprise_infra_enabled is not True:
+            raise ValueError("生产环境必须设置 ENTERPRISE_INFRA_ENABLED=true")
+        required = (
+            ("POSTGRES_HOST", self.postgres_host),
+            ("POSTGRES_DB", self.postgres_db),
+            ("AGENT_APP_PASSWORD", self.agent_app_password),
+            ("REDIS_HOST", self.redis_host),
+            ("REDIS_PASSWORD", self.redis_password),
+            ("AGENT_INTERNAL_TOKEN", self.agent_internal_token),
+            ("JAVA_BASE_URL", self.java_base_url),
+        )
+        missing = [name for name, value in required if not str(value).strip()]
+        if missing:
+            raise ValueError("生产配置不完整：" + "、".join(missing))
+        if self.agent_app_user == self.agent_migrator_user:
+            raise ValueError("迁移账号不能与业务账号相同")
+        if self.agent_app_user.lower() in {"postgres", "root"} or self.agent_migrator_user.lower() in {"postgres", "root"}:
+            raise ValueError("数据库连接不能使用 PostgreSQL 超级用户")
+        if self.agent_app_user != "agent_app":
+            raise ValueError("业务连接必须使用 agent_app")
+        if self.agent_migrator_user != "agent_migrator":
+            raise ValueError("迁移连接必须使用 agent_migrator")
 
 
 settings = Settings()

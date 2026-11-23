@@ -28,6 +28,9 @@ public class AgentServiceProperties {
     @NotBlank
     private String knowledgeQaHistoryPath = "/internal/v1/knowledge-qa/conversations/{conversationId}/messages";
 
+    @NotBlank
+    private String memoryPath = "/internal/v1/memories";
+
     @NotNull
     private Duration streamReadTimeout = Duration.ofSeconds(60);
 
@@ -79,6 +82,14 @@ public class AgentServiceProperties {
 
     public void setKnowledgeQaHistoryPath(String knowledgeQaHistoryPath) {
         this.knowledgeQaHistoryPath = knowledgeQaHistoryPath;
+    }
+
+    public String getMemoryPath() {
+        return memoryPath;
+    }
+
+    public void setMemoryPath(String memoryPath) {
+        this.memoryPath = memoryPath;
     }
 
     public Duration getStreamReadTimeout() {

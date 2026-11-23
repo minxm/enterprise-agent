@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.log_safety import diagnostic
 from app.core.request_context import REQUEST_ID_HEADER, current_request_id
 
 logger = logging.getLogger("app.request")
@@ -28,7 +29,11 @@ async def _http_error(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("Unhandled request failure requestId=%s", current_request_id())
+    logger.error(
+        "Unhandled request failure requestId=%s error=%s",
+        current_request_id(),
+        diagnostic(exc),
+    )
     return _error(500, "服务内部错误")
 
 

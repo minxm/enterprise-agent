@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequestMapping("/api/auth")
 public class AuthController {
 

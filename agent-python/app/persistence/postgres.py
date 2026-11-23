@@ -17,6 +17,15 @@ def build_conninfo(host: str, port: int, database: str, user: str, password: str
     )
 
 
+def reject_superuser(connection: Connection) -> None:
+    row = connection.execute("select rolsuper from pg_roles where rolname = current_user").fetchone()
+    if row is None:
+        raise RuntimeError("数据库连接不能使用超级用户")
+    value = row["rolsuper"] if isinstance(row, dict) else row[0]
+    if value:
+        raise RuntimeError("数据库连接不能使用超级用户")
+
+
 def build_agent_conninfo(settings: Settings) -> str:
     return build_conninfo(
         settings.postgres_host,
@@ -58,6 +67,8 @@ class PostgresResources:
             )
             try:
                 pool.open(wait=True, timeout=5)
+                with pool.connection() as connection:
+                    reject_superuser(connection)
             except Exception:
                 pool.close()
                 raise
@@ -124,6 +135,57 @@ def read_probe(connection: Connection) -> dict[str, object]:
         "business_usage": bool(business_usage),
         "agent_run_absent": bool(agent_run_absent),
     }
+
+
+@contextmanager
+def memory_transaction(
+    pool: ConnectionPool,
+    *,
+    tenant_id: str,
+    actor_id: str,
+    allow_tenant_read: bool,
+    allow_tenant_write: bool,
+) -> Iterator[Connection]:
+    """Bind an already validated memory context for one transaction.
+
+    The four settings are transaction-local. They tell RLS which rows to
+    show. They do not authenticate the caller. The pool commits on success
+    and rolls back when the block raises, which clears the settings.
+    """
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise RuntimeError("tenant_id 不能为空")
+    if not isinstance(actor_id, str) or not actor_id:
+        raise RuntimeError("actor_id 不能为空")
+    if type(allow_tenant_read) is not bool or type(allow_tenant_write) is not bool:
+        raise RuntimeError("租户记忆授权必须是布尔值")
+    read_flag = "on" if allow_tenant_read else "off"
+    write_flag = "on" if allow_tenant_write else "off"
+    with pool.connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select
+                    set_config('app.tenant_id', %s, true),
+                    set_config('app.actor_id', %s, true),
+                    set_config('app.tenant_memory_read', %s, true),
+                    set_config('app.tenant_memory_write', %s, true)
+                """,
+                (tenant_id, actor_id, read_flag, write_flag),
+            )
+            cursor.fetchone()
+            cursor.execute(
+                """
+                select
+                    current_setting('app.tenant_id', true),
+                    current_setting('app.actor_id', true),
+                    current_setting('app.tenant_memory_read', true),
+                    current_setting('app.tenant_memory_write', true)
+                """
+            )
+            observed = cursor.fetchone()
+        if observed != (tenant_id, actor_id, read_flag, write_flag):
+            raise RuntimeError("访问上下文未能写入事务")
+        yield connection
 
 
 @contextmanager

@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @Service
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class IdentityService {
 
     private static final Map<String, String> ROLE_NAMES = Map.of(
@@ -26,7 +26,8 @@ public class IdentityService {
     private static final Map<String, List<String>> ROLE_PERMISSIONS = Map.of(
             "tenant_admin", List.of(
                     "tenant:manage", "contract:read", "contract:write",
-                    "contract:submit", "approval:decide", "policy:manage"),
+                    "contract:submit", "approval:decide", "policy:manage",
+                    "memory:read_tenant", "memory:manage_tenant"),
             "contract_manager", List.of("contract:read", "contract:write", "contract:submit"),
             "approver", List.of("contract:read", "approval:decide"));
 

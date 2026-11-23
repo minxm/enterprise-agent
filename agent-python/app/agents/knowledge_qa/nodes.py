@@ -12,8 +12,10 @@ from uuid import UUID
 
 from langgraph.config import get_stream_writer
 
-from app.agents.knowledge_qa.contract_intent import looks_like_contract_query
 from app.agents.knowledge_qa.events import degradation_category
+from app.agents.knowledge_qa.intent import classify_intent
+from app.agents.knowledge_qa.rag_call import ask_rag
+from app.agents.knowledge_qa.run_context import current_memories
 from app.agents.knowledge_qa.state import MAX_CONVERSATION_TURNS
 from app.core.request_context import current_request_id
 from app.knowledge.prompts import INSUFFICIENT_KNOWLEDGE
@@ -22,7 +24,6 @@ from app.knowledge.rag import RAGAnswer, RAGValidationError, _OMITTED, normalize
 logger = logging.getLogger(__name__)
 
 _INTENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_SENSITIVE = ("sk-", "api_key", "api-key", "bearer ", "password", "postgres://", "postgresql://", "secret")
 UNSUPPORTED_ANSWER = "当前版本只回答企业知识库中的资料问题，不能执行合同审批、付款审核或其他业务操作。"
 
 
@@ -60,21 +61,18 @@ def validate_input(state: dict[str, object], *, default_top_k: int, default_stra
 
 def route_intent(state: dict[str, object]) -> dict[str, object]:
     """Honor an explicit intent. Otherwise a contract lookup is detected from the question."""
-    requested = state.get("requested_intent")
-    if requested == "contract_query" or (requested is None and looks_like_contract_query(state.get("question"))):
-        return {"intent": "contract_query"}
-    if requested in {None, "knowledge_qa"}:
-        return {"intent": "knowledge_qa"}
-    return {"intent": "unsupported"}
+    return {"intent": classify_intent(state.get("requested_intent"), state.get("question"))}
 
 
 def knowledge_qa(state: dict[str, object], *, rag_service: object) -> dict[str, object]:
     try:
-        result = rag_service.ask(  # type: ignore[attr-defined]
+        result = ask_rag(
+            rag_service,
             UUID(str(state["tenant_id"])),
             str(state["question"]),
             top_k=state["top_k"],
             strategy=str(state["retrieval_strategy"]),
+            memories=current_memories(),
         )
     except Exception as exc:
         logger.warning(
@@ -261,13 +259,9 @@ def _require_requested_intent(value: object) -> str | None:
 
 
 def _safe_error(exc: Exception) -> str:
-    detail = str(exc).replace("\n", " ").strip()
-    lowered = detail.lower()
-    if any(token in lowered for token in _SENSITIVE):
-        return exc.__class__.__name__
-    if not detail:
-        return exc.__class__.__name__
-    return f"{exc.__class__.__name__}: {detail[:200]}"
+    from app.core.log_safety import diagnostic
+
+    return diagnostic(exc)
 
 
 def _text(value: object) -> str | None:

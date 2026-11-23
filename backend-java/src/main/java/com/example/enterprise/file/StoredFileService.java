@@ -24,7 +24,7 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 @Service
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class StoredFileService {
 
     private static final Logger log = LoggerFactory.getLogger(StoredFileService.class);

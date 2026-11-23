@@ -4,6 +4,7 @@ import com.example.enterprise.auth.AuthenticatedUser;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.common.response.ApiResponse;
 import com.example.enterprise.identity.IdentityException;
+import com.example.enterprise.identity.IdentityService;
 import com.example.enterprise.identity.TenantContext;
 import com.example.enterprise.integration.agent.AgentClient;
 import com.example.enterprise.integration.agent.AgentServiceException;
@@ -13,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -29,12 +31,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/agent")
 public class KnowledgeQaController {
 
+    static final String READ_TENANT = "memory:read_tenant";
+
     private final AgentConversationService conversations;
     private final AgentClient agentClient;
+    private final ObjectProvider<IdentityService> identities;
 
-    public KnowledgeQaController(AgentConversationService conversations, AgentClient agentClient) {
+    public KnowledgeQaController(
+            AgentConversationService conversations,
+            AgentClient agentClient,
+            ObjectProvider<IdentityService> identities) {
         this.conversations = conversations;
         this.agentClient = agentClient;
+        this.identities = identities;
     }
 
     @GetMapping("/conversations")
@@ -77,6 +86,7 @@ public class KnowledgeQaController {
                     request.question().strip(),
                     request.topK(),
                     request.retrievalStrategy(),
+                    allowTenantRead(user.userId()),
                     requestId,
                     response);
         } catch (AgentServiceException exception) {
@@ -125,6 +135,14 @@ public class KnowledgeQaController {
             }
         }
         return builder.append('"').toString();
+    }
+
+    private boolean allowTenantRead(UUID userId) {
+        IdentityService identity = identities.getIfAvailable();
+        if (identity == null) {
+            return false;
+        }
+        return identity.hasPermission(userId, READ_TENANT);
     }
 
     private static AuthenticatedUser currentUser() {

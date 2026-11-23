@@ -22,7 +22,7 @@ import java.util.UUID;
  * 只读取服务端租户上下文。请求里的 tenantId 不参与授权。
  */
 @RestController
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequestMapping("/api/v1/identity")
 public class IdentityController {
 

@@ -96,7 +96,7 @@ class IdentityIntegrationTest {
         assertEquals(8, constraints);
         assertEquals(4, indexes);
         assertEquals(Boolean.TRUE, migrated);
-        assertEquals(6, permissions);
+        assertEquals(8, permissions);
     }
 
     @Test
@@ -110,7 +110,7 @@ class IdentityIntegrationTest {
         assertEquals("active", identity.currentTenant().status());
         assertEquals(1, identity.listUsers().size());
         assertEquals("tenant_admin", identity.listRoles(user.id()).getFirst().code());
-        assertEquals(6, identity.listPermissions(admin.id()).size());
+        assertEquals(8, identity.listPermissions(admin.id()).size());
         assertTrue(identity.checkUserRole(user.id(), repository.findRoleByCode("approver").orElseThrow().id()).valid());
     }
 
@@ -251,6 +251,50 @@ class IdentityIntegrationTest {
         IdentityException exception = assertThrows(IdentityException.class,
                 () -> identity.createUser("ada", RAW_PASSWORD, "Ada"));
         assertEquals("租户已禁用", exception.getMessage());
+    }
+
+    @Test
+    void tenantAdminReceivesMemoryPermissionsAndOtherRolesDoNot() {
+        Integer defined = jdbc.queryForObject("""
+                select count(*)
+                from business.permission
+                where code in ('memory:read_tenant', 'memory:manage_tenant')
+                """, Integer.class);
+        assertEquals(2, defined);
+
+        TenantView tenant = identity.createTenant("acme-memory", "Acme");
+        TenantContext.set(tenant.id());
+        repository.applyTenant(tenant.id());
+        RoleView admin = repository.findRoleByCode("tenant_admin").orElseThrow();
+        RoleView manager = repository.findRoleByCode("contract_manager").orElseThrow();
+        RoleView approver = repository.findRoleByCode("approver").orElseThrow();
+        assertTrue(identity.listPermissions(admin.id()).stream()
+                .anyMatch(permission -> "memory:read_tenant".equals(permission.code())));
+        assertTrue(identity.listPermissions(admin.id()).stream()
+                .anyMatch(permission -> "memory:manage_tenant".equals(permission.code())));
+        assertTrue(identity.listPermissions(manager.id()).stream()
+                .noneMatch(permission -> permission.code().startsWith("memory:")));
+        assertTrue(identity.listPermissions(approver.id()).stream()
+                .noneMatch(permission -> permission.code().startsWith("memory:")));
+
+        UUID existing = jdbc.queryForObject(
+                "select id from business.tenant order by created_at limit 1", UUID.class);
+        repository.applyTenant(existing);
+        Integer admins = jdbc.queryForObject("""
+                select count(*) from business.role where code = 'tenant_admin'
+                """, Integer.class);
+        if (admins != null && admins > 0) {
+            Integer grants = jdbc.queryForObject("""
+                    select count(*)
+                    from business.role role
+                    join business.role_permission grant_row
+                      on grant_row.role_id = role.id and grant_row.tenant_id = role.tenant_id
+                    join business.permission permission on permission.id = grant_row.permission_id
+                    where role.code = 'tenant_admin'
+                      and permission.code in ('memory:read_tenant', 'memory:manage_tenant')
+                    """, Integer.class);
+            assertEquals(2, grants);
+        }
     }
 
     private void inSavepoint(Runnable action) {

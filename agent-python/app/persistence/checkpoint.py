@@ -11,7 +11,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from app.persistence.postgres import _public_error
+from app.persistence.postgres import _public_error, reject_superuser
 
 
 class CheckpointResources:
@@ -37,6 +37,8 @@ class CheckpointResources:
         )
         try:
             pool.open(wait=True, timeout=5)
+            with pool.connection() as connection:
+                reject_superuser(connection)
         except Exception as exc:
             pool.close()
             raise _public_error("工作流状态存储连接失败", exc, self.secret) from exc

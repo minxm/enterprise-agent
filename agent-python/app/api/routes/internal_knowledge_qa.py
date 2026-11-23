@@ -8,18 +8,17 @@ if a client tries to send it.
 from __future__ import annotations
 
 import re
-import secrets
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.agents.knowledge_qa.service import HistoryMessage, HistoryResult, KnowledgeQAService
 from app.agents.knowledge_qa.sse import open_knowledge_qa_sse
-from app.core.config import RAG_RETRIEVAL_STRATEGIES, settings
+from app.core.config import RAG_RETRIEVAL_STRATEGIES
+from app.core.internal_auth import require_gateway
 
 router = APIRouter()
-_TOKEN_HEADER = "X-Agent-Token"
 
 
 class KnowledgeQaStreamBody(BaseModel):
@@ -32,6 +31,14 @@ class KnowledgeQaStreamBody(BaseModel):
     top_k: int | None = None
     retrieval_strategy: str | None = None
     actor_ticket: str | None = None
+    allow_tenant_read: bool = False
+
+    @field_validator("allow_tenant_read", mode="before")
+    @classmethod
+    def only_bool(cls, value: object) -> bool:
+        if type(value) is not bool:
+            raise ValueError("授权必须是布尔值")
+        return value
 
     @field_validator("question")
     @classmethod
@@ -65,13 +72,6 @@ class KnowledgeQaStreamBody(BaseModel):
         return value
 
 
-def require_gateway(x_agent_token: str | None = Header(default=None, alias=_TOKEN_HEADER)) -> None:
-    expected = settings.agent_internal_token
-    provided = x_agent_token or ""
-    if not expected or len(expected) != len(provided) or not secrets.compare_digest(expected, provided):
-        raise HTTPException(status_code=401, detail="未认证")
-
-
 def get_knowledge_qa_service(request: Request) -> KnowledgeQAService:
     service = getattr(request.app.state, "knowledge_qa", None)
     if not isinstance(service, KnowledgeQAService):
@@ -96,6 +96,7 @@ async def stream_knowledge_qa(
         arguments["retrieval_strategy"] = body.retrieval_strategy
     if body.actor_ticket is not None:
         arguments["actor_ticket"] = body.actor_ticket
+    arguments["allow_tenant_read"] = body.allow_tenant_read
     return open_knowledge_qa_sse(service, **arguments)
 
 

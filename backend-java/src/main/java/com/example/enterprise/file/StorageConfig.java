@@ -7,7 +7,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.context.annotation.Profile;
 
 @Configuration
-@Profile("dev")
+@Profile({"dev", "prod"})
 @EnableConfigurationProperties(StorageProperties.class)
 public class StorageConfig {
 

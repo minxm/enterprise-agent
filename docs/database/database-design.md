@@ -31,9 +31,9 @@
 1. `CREATE EXTENSION IF NOT EXISTS vector`
 2. 创建 schema `business`、`agent`
 3. 创建四个角色，并授予 schema 使用权限
-4. 启用默认权限，使后续 Flyway 和 Python 迁移创建的表自动只对对应 app 角色开放 DML
+4. 启用默认权限，使后续由迁移角色新建的普通业务表自动对对应 app 角色开放 DML。迁移历史表随后单独收成只读，见第 9 节
 
-四个角色都不作为超级用户运行应用。`business_app` 不能 `USAGE` `agent`。`agent_app` 不能 `USAGE` `business`。
+四个角色都不作为超级用户运行应用，也互不继承。`business_app` 不能 `USAGE` `agent`。`agent_app` 不能 `USAGE` `business`。`business_app` 对 `business` 只有 `USAGE`，没有 `CREATE`；`agent_app` 对 `agent` 同样只有 `USAGE`。
 
 ## 3. business 与 agent 的数据归属
 
@@ -529,6 +529,8 @@ SELECT set_config('app.tenant_id', :tenant_id, true);
 
 第三个参数 `true` 表示只在当前事务有效。租户来自已经校验过的用户或内部请求头，不来自模型参数。
 
+`agent.thread_run` 保存 Knowledge QA 的 fencing 计数，不保存问题、回答、令牌或锁持有者。主键是 `(tenant_id, thread_id)`，不单独把 `thread_id` 当主键。`thread_id` 必须等于 `kq:{tenant_id}:{conversation_id}`。`fence` 是从 1 开始的 `bigint`。表启用并强制 RLS。`tenant_isolation` 只允许当前事务的 `app.tenant_id`。`thread_run_maintainer` 只允许 `agent_migrator`。`agent_app` 只有 `SELECT`、`INSERT` 和 `UPDATE`。运行资格通过一条 `INSERT ... ON CONFLICT DO UPDATE` 原子加一，连接在事务结束时归还，不在模型调用期间占用。`FencedPostgresSaver` 在同一事务里执行 `UPDATE agent.thread_run SET fence = fence WHERE tenant_id = ... AND thread_id = ... AND fence = ...`，只有命中一行才写 checkpoint 或 pending write。进程里的 `CheckpointResources` 仍创建原来的 `PostgresSaver`，Graph 入口还没有进入这个校验。
+
 迁移角色是表所有者。所有者默认绕过 RLS，因此迁移角色不用于处理用户请求。运行时角色不是所有者，并且表使用 `FORCE ROW LEVEL SECURITY`。
 
 跨租户访问在接口上返回 `NOT_FOUND`。RLS 则让错误的租户设置读不到行。两层都要保留。
@@ -539,9 +541,10 @@ SELECT set_config('app.tenant_id', :tenant_id, true);
 
 | 顺序 | 执行者 | 位置 | 做什么 |
 | --- | --- | --- | --- |
-| 1 | PostgreSQL 首次初始化 | `database/postgres/init` | 扩展、schema、角色、默认权限 |
-| 2 | backend-java 启动 | `backend-java/src/main/resources/db/migration` | Flyway 迁移 `business` |
-| 3 | agent-python 启动 | `agent-python/migrations/{version}_{name}.sql` | 基础设施启用时，由 `agent_migrator` 按 `agent.schema_migrations` 执行尚未应用的脚本。`PostgresSaver.setup()` 仍是后续 checkpoint 步骤 |
+| 1 | PostgreSQL 首次初始化 | `database/postgres/init` | 扩展、schema、角色、默认权限。已有数据卷不会重跑 |
+| 2 | Java `migrate` profile；开发环境仍在启动时执行 | `backend-java/src/main/resources/db/migration` | Flyway 迁移 `business`。正式 prod 应用只读 `flyway_schema_history`，不执行迁移 |
+| 2a | `business_migrator` | `database/postgres/privileges/business_flyway_history.sql` | 收回 `business_app` 对 Flyway 历史表的写权限，保留 SELECT。不是 Flyway 版本。Java 迁移任务在 Flyway 结束后执行同样的语句 |
+| 3 | `python -m app.persistence.migrate`；开发环境在基础设施启用时仍于启动时执行 | `agent-python/migrations/{version}_{name}.sql` | 由 `agent_migrator` 按 `agent.schema_migrations` 执行尚未应用的脚本。正式 prod 应用只读版本记录。`PostgresSaver.setup()` 不在应用启动时执行 |
 
 `agent.schema_migrations`：
 
@@ -551,9 +554,24 @@ SELECT set_config('app.tenant_id', :tenant_id, true);
 | `name` | 非空 |
 | `applied_at` | 非空 |
 
-该表没有 `tenant_id`，由 `agent_migrator` 写入，并撤销 `agent_app` 与 `PUBLIC` 的权限。Python 不引入 Alembic。迁移使用独立的 `agent_migrator` 连接和会话级 Advisory Lock，不复用 `agent_app` 连接池。脚本按版本号排序，每个脚本和它的版本行在同一个事务内执行。已存在的版本跳过。迁移失败则整笔回滚。
+该表没有 `tenant_id`，所有者是 `agent_migrator`。`agent_app` 只有 SELECT，用来在生产启动时核对版本，不能插入、更新、删除或清空版本行，也没有 `TRUNCATE`、`REFERENCES`、`TRIGGER`。`PUBLIC` 没有这张表的权限。默认权限本来会在建表时授予 `agent_app` 全部 DML；`app/persistence/migrate.py` 每次迁移都会先收回再只授予 SELECT。`agent_app` 不是表所有者，也不能在 `agent` schema 里 `CREATE`，所以不能 `ALTER` 或 `DROP` 这张表。Python 不引入 Alembic。迁移使用独立的 `agent_migrator` 连接和会话级 Advisory Lock，不复用 `agent_app` 连接池。脚本按版本号排序，每个脚本和它的版本行在同一个事务内执行。已存在的版本跳过。迁移失败则整笔回滚。正式生产启动顺序见 [数据库迁移](../operations/database-migration.md)。
 
-Flyway 历史表放在 `business` schema，不使用默认的 `public`。
+`business.flyway_schema_history` 放在 `business` schema，不使用默认的 `public`。表所有者是 `business_migrator`。`business_app` 只保留 SELECT，供生产启动时的 Schema Guard 读取 `version`。它不能 `INSERT`、`UPDATE`、`DELETE`、`TRUNCATE`，也没有 `REFERENCES` 和 `TRIGGER`。`PUBLIC` 没有这张表的权限。`business_app` 不继承 `business_migrator`，不是表所有者，对 `business` schema 也没有 `CREATE`，因此 `CREATE TABLE`、`ALTER` 和 `DROP` 都会因权限不足失败。
+
+初始化脚本里的默认权限仍然给后续普通业务表授予 `SELECT, INSERT, UPDATE, DELETE`。历史 Flyway 脚本依赖这组默认权限，不在每个版本里重复 `GRANT`。Flyway 创建历史表时也会套上同一组权限。收权脚本只处理这一张历史表，不改默认权限，也不改其他表已有的 DML。脚本由 `business_migrator` 执行。Java 的 `migrate` profile 和开发环境启动时的 Flyway 在迁移成功后执行同样的三条语句，所以这次调整不是新的 `V*.sql`。已经初始化过的数据库不会重跑 `database/postgres/init`；对现有库直接由 `business_migrator` 执行权限脚本即可。
+
+核对应用账号没有历史表写权限时，用该账号自己的连接，而不是超级用户：
+
+```sql
+SELECT current_user,
+       has_table_privilege(current_user, 'business.flyway_schema_history', 'SELECT') AS can_select,
+       has_table_privilege(current_user, 'business.flyway_schema_history', 'INSERT') AS can_insert,
+       has_table_privilege(current_user, 'business.flyway_schema_history', 'UPDATE') AS can_update,
+       has_table_privilege(current_user, 'business.flyway_schema_history', 'DELETE') AS can_delete,
+       has_table_privilege(current_user, 'business.flyway_schema_history', 'TRUNCATE') AS can_truncate;
+```
+
+`business_app` 的结果应是 SELECT 为真，其余为假。`agent_app` 对 `agent.schema_migrations` 使用同一组判断。写操作探针必须放在会回滚的事务里；权限不足时 SQLState 是 `42501`，不会留下新的历史行。
 
 两个应用的迁移互不读取对方 schema，因此 Compose 不让 Java 和 Python 互相 `depends_on`。它们都只等待数据库健康检查通过。
 
@@ -591,6 +609,20 @@ Redis 键不替代上表：
 | `idem:agent:{tenant_id}:{idempotency_key}` | Python | 24 小时内的写响应缓存 |
 
 锁获取失败返回 `CONFLICT`，不绕过锁继续启动图。
+
+Java 的 Actor Ticket 使用同一个 Redis 实例，让多个 Java 进程共享一次性票据。它不替代上表里的数据库唯一约束，也不是幂等缓存。
+
+| 项 | 规则 |
+| --- | --- |
+| 键 | `actor-ticket:v1:` 加上票据原文的 SHA-256 十六进制摘要 |
+| 值 | 只有 `tenantId\|actorId`。不保存票据原文、JWT、`AGENT_INTERNAL_TOKEN` 或合同正文 |
+| 有效期 | 180 秒 |
+| 签发 | `SET key value NX EX 180`。只有 SET 成功才把票据交给 Python。NX 冲突时重新生成票据 |
+| 消费 | `GETDEL`。缺失、过期和重复消费都视为无效 |
+| 撤销 | `DEL`。重复撤销没有副作用。删除失败不能当成成功 |
+| 故障 | Redis 超时、断连或命令失败时拒绝签发和消费，不回退到进程内 Map，也不跳过票据校验。这类失败是 503，不写成 401 |
+
+当前 Redis 是单节点，AOF 使用 `appendfsync everysec`。进程崩溃时，大约最近一秒的写入可能没有落盘。已经 `GETDEL` 的票据在崩溃恢复后可能重新出现，形成短暂重放窗口。异步主从提升也有同样的窗口。票据读取必须走主节点。窗口之后，超过 180 秒的票据会过期。
 
 ## 11. 待确认
 

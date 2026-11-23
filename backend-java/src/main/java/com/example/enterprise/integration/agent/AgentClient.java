@@ -128,6 +128,7 @@ public class AgentClient {
             String question,
             Integer topK,
             String retrievalStrategy,
+            boolean allowTenantRead,
             String requestId,
             HttpServletResponse servletResponse) {
         String token = properties.getInternalToken();
@@ -136,7 +137,7 @@ public class AgentClient {
         }
         String actorTicket = tickets.issue(tenantId, actorId);
         KnowledgeQaPythonRequest body = new KnowledgeQaPythonRequest(
-                tenantId, actorId, conversationId, question, topK, retrievalStrategy, actorTicket);
+                tenantId, actorId, conversationId, question, topK, retrievalStrategy, actorTicket, allowTenantRead);
         try {
             agentStreamRestClient.post()
                     .uri(properties.getKnowledgeQaPath())

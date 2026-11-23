@@ -7,6 +7,7 @@ that those modules already use. The checkpointer is the process-wide pool.
 from __future__ import annotations
 
 from app.agents.knowledge_qa.service import KnowledgeQAService
+from app.memory.service import MemoryService
 from app.clients.java_backend.client import JavaBackendClient
 from app.core.config import Settings
 from app.tools.contract_query import ContractQueryTool
@@ -77,6 +78,11 @@ def build_knowledge_qa_runtime(settings: Settings, pool: object, checkpointer: o
         closers.append(backend)
         contract_tool = ContractQueryTool(backend)
     return KnowledgeQaRuntime(
-        KnowledgeQAService(rag, checkpointer=checkpointer, contract_tool=contract_tool),
+        KnowledgeQAService(
+            rag,
+            checkpointer=checkpointer,
+            contract_tool=contract_tool,
+            memory=MemoryService(pool),
+        ),
         closers,
     )

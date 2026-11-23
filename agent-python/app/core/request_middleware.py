@@ -4,6 +4,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.log_safety import diagnostic
 from app.core.request_context import REQUEST_ID_HEADER, reset_request_id, resolve_request_id, set_request_id
 
 logger = logging.getLogger("app.request")
@@ -41,10 +42,14 @@ class RequestIdMiddleware:
                     scope.get("path"),
                     request_id,
                 )
-            except Exception:
+            except Exception as exc:
                 if response_started:
                     raise
-                logger.exception("Unhandled request failure requestId=%s", request_id)
+                logger.error(
+                    "Unhandled request failure requestId=%s error=%s",
+                    request_id,
+                    diagnostic(exc),
+                )
                 response = JSONResponse(
                     status_code=500,
                     content={"code": 500, "message": "服务内部错误", "requestId": request_id},

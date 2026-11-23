@@ -1,6 +1,7 @@
 package com.example.enterprise.common.request;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -26,7 +27,7 @@ class RequestIdFilterTest {
 
     @Test
     void generatesAnIdWhenTheHeaderIsMissing() throws Exception {
-        String requestId = mockMvc.perform(get("/api/v1/test/ping"))
+        String requestId = mockMvc.perform(get("/api/v1/test/ping").with(user("probe")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestId").exists())
                 .andReturn()
@@ -39,7 +40,7 @@ class RequestIdFilterTest {
 
     @Test
     void keepsAValidIncomingIdAndClearsMdc() throws Exception {
-        mockMvc.perform(get("/api/v1/test/ping").header(RequestIds.HEADER, "trace_OK-1"))
+        mockMvc.perform(get("/api/v1/test/ping").with(user("probe")).header(RequestIds.HEADER, "trace_OK-1"))
                 .andExpect(status().isOk())
                 .andExpect(header().string(RequestIds.HEADER, "trace_OK-1"))
                 .andExpect(jsonPath("$.requestId").value("trace_OK-1"));
@@ -49,7 +50,7 @@ class RequestIdFilterTest {
 
     @Test
     void replacesAnUnsafeId() throws Exception {
-        String requestId = mockMvc.perform(get("/api/v1/test/ping").header(RequestIds.HEADER, "bad id\n<script>"))
+        String requestId = mockMvc.perform(get("/api/v1/test/ping").with(user("probe")).header(RequestIds.HEADER, "bad id\n<script>"))
                 .andReturn()
                 .getResponse()
                 .getHeader(RequestIds.HEADER);
@@ -62,6 +63,7 @@ class RequestIdFilterTest {
     @Test
     void validationErrorCarriesRequestIdWithoutStackDetails() throws Exception {
         mockMvc.perform(post("/api/v1/test/validation")
+                        .with(user("probe"))
                         .header(RequestIds.HEADER, "trace-valid")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
@@ -72,6 +74,7 @@ class RequestIdFilterTest {
                 .andExpect(jsonPath("$.requestId").value("trace-valid"));
 
         String body = mockMvc.perform(post("/api/v1/test/validation")
+                        .with(user("probe"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\" "))
                 .andReturn()

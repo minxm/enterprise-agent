@@ -30,7 +30,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Service
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class ContractService {
 
     private static final Set<String> FILE_ROLES = Set.of("original", "attachment", "supplement", "other");

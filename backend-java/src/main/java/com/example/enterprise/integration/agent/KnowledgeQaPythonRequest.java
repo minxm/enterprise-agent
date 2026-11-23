@@ -12,5 +12,6 @@ public record KnowledgeQaPythonRequest(
         String question,
         @JsonProperty("top_k") Integer topK,
         @JsonProperty("retrieval_strategy") String retrievalStrategy,
-        @JsonProperty("actor_ticket") String actorTicket) {
+        @JsonProperty("actor_ticket") String actorTicket,
+        @JsonProperty("allow_tenant_read") boolean allowTenantRead) {
 }

@@ -33,7 +33,7 @@
 | backend-java | 身份、权限、租户、合同、审批、用户可见消息、业务审计；业务数据的唯一写入方 |
 | agent-python | 合同审核图、文档解析、检索、模型调用、受控工具、执行记录、长期记忆 |
 | PostgreSQL | 同一实例中的 `business`、`agent` 两个 schema；`agent` 使用 pgvector |
-| Redis | 幂等响应缓存，以及 Java 在调用 Agent 前持有的会话运行锁 |
+| Redis | Java 多实例共享的 Actor Ticket。设计中的幂等缓存和会话锁仍以数据库唯一约束兜底 |
 | MinIO | 合同与条款库原文件 |
 
 Java 是业务事实的权威。合同状态、审批结论、用户可见对话都在 `business`。Python 不连接 `business` schema。它需要业务数据时调用 Java 内部接口，需要落业务结果时也只调用 Java。
@@ -107,11 +107,13 @@ PDF 与 DOCX 解析在 `app/documents`。纯文本解析尚未实现，也不单
 | 技术 | 第一阶段用法 |
 | --- | --- |
 | PostgreSQL + pgvector | 业务数据与向量检索放在同一实例，避免再运维一套向量库。镜像 `pgvector/pgvector:0.8.7-pg16` |
-| Redis | 只做两件事：写接口的幂等响应缓存；Java 调用 Agent 期间的会话锁。Redis 里的数据都可以丢，丢了由数据库唯一约束兜底 |
+| Redis | Java 在多个实例之间共享 Actor Ticket，键为 `actor-ticket:v1:{sha256}`，TTL 180 秒。设计中的幂等缓存和会话锁仍以数据库唯一约束为最终防重。Actor Ticket 没有数据库副本 |
 | MinIO | 保存原文件。数据库只存对象键和校验信息 |
 | Docker Compose | `deploy/docker-compose.yml` 编排 `postgres`、`redis` 和 `minio`。frontend、backend-java、agent-python 仍各自启动 |
 
 幂等缓存保留 24 小时。过期后的重试仍由数据库唯一约束保证不重复写入；调用方可能收不到与第一次完全相同的快捷响应，但不会产生第二份审批任务或第二份草稿。
+
+Actor Ticket 的签发是 `SET NX EX 180`，消费是原子 `GETDEL`，撤销是 `DEL`。值只含租户 ID 和用户 ID。Redis 不可用时 Java 拒绝签发和消费，不回退到进程内 Map。当前是单节点，AOF 为 `appendfsync everysec`。崩溃恢复或异步主从切换可能把已删除的票据短暂重放；不要从副本读取票据。
 
 日志是第一阶段的可观测手段。每条日志包含 `service`、`trace_id`、`tenant_id`、`user_id`、`run_id`。日志中不写访问令牌、内部令牌、文件正文和完整模型提示词。
 

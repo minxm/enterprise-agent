@@ -13,7 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
 
 @Service
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class AuthService {
 
     private static final String LOGIN_FAILED = "登录失败";

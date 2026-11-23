@@ -282,7 +282,7 @@ agent-python 不映射宿主机端口。MinIO 控制台不对公网开放。
 | 把审批结论同步进长期记忆当事实源 | 审批结论只在 `approval_task` 与合同状态 |
 | `rag_node` 之外再注册一个可由模型随意改过滤条件的检索工具 | 检索只在 `app/rag` |
 | Java 与 Python 各拿一把会话运行锁 | 只有 Java 的 `lock:review-session:{tenant_id}:{session_id}` |
-| 用 Redis 保存合同正文、审批结论或会话全文 | Redis 只保留幂等缓存和会话锁 |
+| 用 Redis 保存合同正文、审批结论、会话全文、票据原文或内部令牌 | Redis 可以保存 Actor Ticket 的租户 ID 和用户 ID；正文、令牌和票据原文不进入 Redis |
 | frontend 配置 agent-python 或 MinIO 地址 | 浏览器只认识 Java |
 | 第一阶段注册付款图或通用问答图 | 只有合同审核图 |
 | 在 Java 中调用模型或拼装审核提示词 | 只在 Python |

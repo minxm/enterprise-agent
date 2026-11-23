@@ -88,6 +88,45 @@ def test_blank_server_token_and_unready_service_are_rejected(monkeypatch):
     assert TOKEN not in unready.text
 
 
+def test_tenant_read_grant_comes_from_the_gateway_body_and_cannot_be_forged(monkeypatch):
+    monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
+    seen: list[bool] = []
+
+    class _Memory:
+        def recall(self, ctx):
+            seen.append(ctx.allow_tenant_read)
+            assert ctx.allow_tenant_write is False
+            return ()
+
+    rag = ScriptedRAG([_answer("部门负责人审批。")])
+    service = KnowledgeQAService(rag, memory=_Memory())
+    with TestClient(_app(service)) as client:
+        forged_write = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-write"),
+            json={**_body(), "allow_tenant_write": True},
+        )
+        forged_type = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-type"),
+            json={**_body(), "allow_tenant_read": "true"},
+        )
+        with client.stream(
+            "POST",
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-read"),
+            json={**_body(), "allow_tenant_read": True},
+        ) as response:
+            assert response.status_code == 200
+            raw = b"".join(response.iter_bytes()).decode("utf-8")
+
+    assert forged_write.status_code == 422
+    assert forged_type.status_code == 422
+    assert seen == [True]
+    assert "MEMORY" not in raw
+    assert all(event[0] != "memory" for event in _parse_sse(raw))
+
+
 def test_authenticated_stream_uses_gateway_identity_and_rejects_thread_id(monkeypatch):
     monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
     rag = ScriptedRAG([_answer("部门负责人审批。[1]")])

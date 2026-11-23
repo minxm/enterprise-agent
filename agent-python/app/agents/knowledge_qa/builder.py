@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.knowledge_qa.contract_node import contract_query
 from app.agents.knowledge_qa.nodes import format_response, knowledge_qa, route_intent, unsupported, validate_input
+from app.agents.knowledge_qa.run_context import RunContext
 from app.agents.knowledge_qa.state import KnowledgeQAState
 
 
@@ -23,7 +24,7 @@ def build_knowledge_qa_graph(
     default_strategy: str = "vector",
     checkpointer: object | None = None,
 ):
-    graph = StateGraph(KnowledgeQAState)
+    graph = StateGraph(KnowledgeQAState, context_schema=RunContext)
     graph.add_node("validate_input", lambda state: validate_input(state, default_top_k=default_top_k, default_strategy=default_strategy))
     graph.add_node("route_intent", route_intent)
     graph.add_node("knowledge_qa", lambda state: knowledge_qa(state, rag_service=rag_service))

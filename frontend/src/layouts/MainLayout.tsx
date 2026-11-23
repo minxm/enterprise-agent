@@ -3,6 +3,7 @@ import {
   CheckSquareOutlined,
   DashboardOutlined,
   FileTextOutlined,
+  ProfileOutlined,
   ReadOutlined,
 } from '@ant-design/icons';
 import { Layout, Menu } from 'antd';
@@ -17,6 +18,7 @@ const menuItems = [
   { key: '/reviews', icon: <AuditOutlined />, label: '智能审核' },
   { key: '/approvals', icon: <CheckSquareOutlined />, label: '审批中心' },
   { key: '/knowledge', icon: <ReadOutlined />, label: '知识与合同' },
+  { key: '/memories', icon: <ProfileOutlined />, label: '长期记忆' },
 ];
 
 export default function MainLayout() {

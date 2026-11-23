@@ -1,0 +1,48 @@
+enterprise:
+  auth:
+    secret: ${JWT_SECRET}
+    issuer: ${JWT_ISSUER:enterprise-agent}
+    ttl: ${JWT_TTL:2h}
+  storage:
+    endpoint: ${MINIO_ENDPOINT}
+    access-key: ${MINIO_ACCESS_KEY}
+    secret-key: ${MINIO_SECRET_KEY}
+    bucket: ${MINIO_BUCKET:enterprise-agent}
+    max-bytes: ${FILE_MAX_BYTES:20971520}
+
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+    username: business_app
+    password: ${BUSINESS_APP_PASSWORD}
+    hikari:
+      pool-name: business-app
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 3000
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+      timeout: 2s
+
+agent:
+  service:
+    base-url: ${AGENT_SERVICE_BASE_URL}
+    internal-token: ${AGENT_INTERNAL_TOKEN:}
+
+logging:
+  level:
+    root: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: false

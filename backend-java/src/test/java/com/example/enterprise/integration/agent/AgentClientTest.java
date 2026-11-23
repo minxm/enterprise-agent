@@ -7,7 +7,9 @@ import com.example.enterprise.agentgateway.HistorySource;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
 import com.example.enterprise.config.RestClientConfig;
+import com.example.enterprise.internal.ActorTicketException;
 import com.example.enterprise.internal.ActorTicketStore;
+import com.example.enterprise.internal.ActorTicketStores;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.WriteListener;
 import java.io.ByteArrayOutputStream;
@@ -192,7 +194,7 @@ class AgentClientTest {
 
         assertThatThrownBy(() -> client.writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-missing-token", new MockHttpServletResponse()))
+                "问题", null, null, false, "trace-missing-token", new MockHttpServletResponse()))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("Agent 服务认证未配置");
         assertThat(server.getRequestCount()).isZero();
@@ -210,7 +212,7 @@ class AgentClientTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         try {
             streamClient(server.url("/").toString(), "gateway-test-token").writeKnowledgeQaStream(
-                    tenantId, actorId, conversationId, "付款由谁审批？", 5, "vector", "trace-stream", response);
+                    tenantId, actorId, conversationId, "付款由谁审批？", 5, "vector", false, "trace-stream", response);
         } finally {
             MDC.remove(RequestIds.MDC_KEY);
         }
@@ -225,6 +227,8 @@ class AgentClientTest {
         assertThat(body).contains("\"conversation_id\":\"" + conversationId + "\"");
         assertThat(body).contains("付款由谁审批？");
         assertThat(body).contains("\"actor_ticket\":");
+        assertThat(body).contains("\"allow_tenant_read\":false");
+        assertThat(body).doesNotContain("allow_tenant_write");
         assertThat(body).doesNotContain("thread_id");
         assertThat(request.getPath()).isEqualTo("/internal/v1/knowledge-qa/stream");
         String forwarded = text(response);
@@ -237,13 +241,13 @@ class AgentClientTest {
 
     @Test
     void returnsASafeErrorWhenPythonIsDown() {
-        ActorTicketStore tickets = new ActorTicketStore();
+        ActorTicketStore tickets = ActorTicketStores.memory();
         AgentClient client = streamClient("http://127.0.0.1:1", "gateway-test-token", tickets);
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         assertThatThrownBy(() -> client.writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-down", response))
+                "问题", null, null, false, "trace-down", response))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("Agent 服务不可用")
                 .extracting(exception -> ((AgentServiceException) exception).getStatus())
@@ -254,7 +258,7 @@ class AgentClientTest {
 
     @Test
     void appendsRunFailedWhenPythonClosesAfterTheStreamStarts() throws Exception {
-        ActorTicketStore tickets = new ActorTicketStore();
+        ActorTicketStore tickets = ActorTicketStores.memory();
         try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             Thread serverThread = new Thread(() -> serveOneChunkThenClose(socket));
             serverThread.start();
@@ -262,7 +266,7 @@ class AgentClientTest {
             streamClient("http://127.0.0.1:" + socket.getLocalPort(), "gateway-test-token", tickets)
                     .writeKnowledgeQaStream(
                             UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                            "问题", null, null, "trace-cut", response);
+                            "问题", null, null, false, "trace-cut", response);
             serverThread.join(5000);
             String forwarded = text(response);
             assertThat(forwarded).contains("event: run_started");
@@ -277,7 +281,7 @@ class AgentClientTest {
 
     @Test
     void clearsTheTicketWhenTheClientDisconnects() throws Exception {
-        ActorTicketStore tickets = new ActorTicketStore();
+        ActorTicketStore tickets = ActorTicketStores.memory();
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "text/event-stream")
                 .setBody("event: run_started\ndata: {\"request_id\":\"trace-drop\"}\n\n"
@@ -309,12 +313,30 @@ class AgentClientTest {
 
         streamClient(server.url("/").toString(), "gateway-test-token", tickets).writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-drop", response);
+                "问题", null, null, false, "trace-drop", response);
 
         assertThat(tickets.size()).isZero();
         assertThat(text(response)).contains("event: run_started");
         assertThat(text(response)).doesNotContain("agent_stream_interrupted");
         assertThat(text(response)).doesNotContain("Exception");
+    }
+
+    @Test
+    void revokeFailureAfterACommittedStreamIsNotSwallowed() {
+        server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("event: run_started\ndata: {\"request_id\":\"trace-revoke\"}\n\n"));
+        ActorTicketStore tickets = ActorTicketStores.failingRevoke();
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThatThrownBy(() -> streamClient(server.url("/").toString(), "gateway-test-token", tickets)
+                .writeKnowledgeQaStream(
+                        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                        "问题", null, null, false, "trace-revoke", response))
+                .isInstanceOf(ActorTicketException.class)
+                .hasMessage("Ticket 存储不可用");
+        assertThat(text(response)).contains("event: run_started");
+        assertThat(text(response)).doesNotContain("Ticket 存储不可用");
     }
 
     @Test
@@ -324,7 +346,7 @@ class AgentClientTest {
 
         assertThatThrownBy(() -> streamClient(server.url("/").toString(), "gateway-test-token").writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-auth", response))
+                "问题", null, null, false, "trace-auth", response))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("Agent 服务认证失败")
                 .satisfies(exception -> assertThat(exception.getMessage()).doesNotContain("sk-live-secret"));
@@ -347,7 +369,7 @@ class AgentClientTest {
 
         streamClient(server.url("/").toString(), "gateway-test-token").writeKnowledgeQaStream(
                 UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
-                "问题", null, null, "trace-failed", response);
+                "问题", null, null, false, "trace-failed", response);
 
         String forwarded = text(response);
         assertThat(forwarded.indexOf("event: run_started")).isLessThan(forwarded.indexOf("event: run_failed"));
@@ -370,7 +392,7 @@ class AgentClientTest {
             Thread caller = new Thread(() -> streamClient(
                     "http://127.0.0.1:" + socket.getLocalPort(), "gateway-test-token")
                     .writeKnowledgeQaStream(
-                            tenantId, actorId, conversationId, "付款由谁审批？", null, null,
+                            tenantId, actorId, conversationId, "付款由谁审批？", null, null, false,
                             "trace-live", response));
             caller.start();
             assertThat(firstEvent.await(5, TimeUnit.SECONDS)).isTrue();
@@ -412,11 +434,11 @@ class AgentClientTest {
         properties.setInternalToken(token);
 
         RestClient restClient = RestClientConfig.create(baseUrl, connectTimeout, readTimeout);
-        return new AgentClient(restClient, restClient, properties, new ActorTicketStore());
+        return new AgentClient(restClient, restClient, properties, ActorTicketStores.memory());
     }
 
     private AgentClient streamClient(String baseUrl, String token) {
-        return streamClient(baseUrl, token, new ActorTicketStore());
+        return streamClient(baseUrl, token, ActorTicketStores.memory());
     }
 
     private AgentClient streamClient(String baseUrl, String token, ActorTicketStore tickets) {

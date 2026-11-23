@@ -16,6 +16,8 @@ import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
@@ -23,8 +25,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 
 @Configuration
+@Profile("!migrate")
 @EnableConfigurationProperties(AuthProperties.class)
 public class SecurityConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
 
     @Bean
     public SecurityFilterChain securityFilterChain(
@@ -43,27 +48,32 @@ public class SecurityConfig {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .anonymous(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint((request, response, authException) -> {
-                    response.setStatus(401);
-                    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                    objectMapper.writeValue(response.getOutputStream(), ApiResponse.failure(401, "未认证"));
-                }))
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            log.debug("rejected {} {}", request.getRequestURI(), authException.getClass().getSimpleName());
+                            response.setStatus(401);
+                            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            objectMapper.writeValue(response.getOutputStream(), ApiResponse.failure(401, "未认证"));
+                        })
+                        .accessDeniedHandler((request, response, denied) -> {
+                            response.setStatus(403);
+                            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+                            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                            objectMapper.writeValue(response.getOutputStream(), ApiResponse.failure(403, "无权访问"));
+                        }))
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").denyAll()
                         .requestMatchers("/api/v1/integration/agent/health").permitAll()
-                        .requestMatchers("/api/v1/test/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
-                        .requestMatchers("/api/v1/identity/**").authenticated()
-                        .requestMatchers("/api/v1/files/**").authenticated()
-                        .requestMatchers("/api/v1/contracts/**").authenticated()
-                        .requestMatchers("/api/v1/agent/**").authenticated()
-                        .anyRequest().permitAll())
+                        .requestMatchers("/internal/v1/**").permitAll()
+                        .anyRequest().authenticated())
                 .build();
     }
 
     @Bean
-    @Profile("dev")
+    @Profile({"dev", "prod"})
     public JwtService jwtService(AuthProperties properties) {
         return new JwtService(properties.getSecret(), properties.getIssuer(), properties.getTtl(), Clock.systemUTC());
     }

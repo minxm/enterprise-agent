@@ -30,7 +30,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequestMapping("/api/v1/contracts")
 public class ContractController {
 

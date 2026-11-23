@@ -9,7 +9,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class AuthRepository {
 
     private final JdbcTemplate jdbc;

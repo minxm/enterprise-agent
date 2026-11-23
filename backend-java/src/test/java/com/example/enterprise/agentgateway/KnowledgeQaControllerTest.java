@@ -1,6 +1,7 @@
 package com.example.enterprise.agentgateway;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
@@ -23,8 +24,10 @@ import com.example.enterprise.common.response.GlobalExceptionHandler;
 import com.example.enterprise.config.SecurityConfig;
 import com.example.enterprise.identity.IdentityException;
 import com.example.enterprise.identity.IdentityExceptionHandler;
+import com.example.enterprise.identity.IdentityService;
 import com.example.enterprise.integration.agent.AgentClient;
 import com.example.enterprise.integration.agent.AgentServiceException;
+import com.example.enterprise.internal.ActorTicketException;
 import jakarta.servlet.http.HttpServletResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -64,6 +67,9 @@ class KnowledgeQaControllerTest {
     @MockitoBean
     private AgentConversationService conversations;
 
+    @MockitoBean
+    private IdentityService identity;
+
     @Test
     void rejectsAnUnauthenticatedStream() throws Exception {
         mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
@@ -93,7 +99,32 @@ class KnowledgeQaControllerTest {
                 eq("付款由谁审批？"),
                 eq(5),
                 eq("vector"),
+                eq(false),
                 eq("trace-qa"),
+                any(HttpServletResponse.class));
+    }
+
+    @Test
+    void computesTenantMemoryReadOnTheServer() throws Exception {
+        when(identity.hasPermission(USER, KnowledgeQaController.READ_TENANT)).thenReturn(true);
+
+        mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
+                        .with(authentication(principal()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"conversationId":"%s","question":"付款由谁审批？","allowTenantRead":false,"allow_tenant_read":true,"tenantId":"%s"}
+                                """.formatted(CONVERSATION, OTHER_TENANT)))
+                .andExpect(status().isOk());
+
+        verify(agentClient).writeKnowledgeQaStream(
+                eq(TENANT),
+                eq(USER),
+                eq(CONVERSATION),
+                eq("付款由谁审批？"),
+                isNull(),
+                isNull(),
+                eq(true),
+                any(),
                 any(HttpServletResponse.class));
     }
 
@@ -109,7 +140,7 @@ class KnowledgeQaControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("会话不存在"));
         verify(agentClient, never()).writeKnowledgeQaStream(
-                any(), any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -132,7 +163,7 @@ class KnowledgeQaControllerTest {
     @Test
     void returnsASafeErrorWhenPythonIsUnavailable() throws Exception {
         doThrow(new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务不可用"))
-                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), any(), any());
+                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any());
 
         mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
                         .with(authentication(principal()))
@@ -147,7 +178,7 @@ class KnowledgeQaControllerTest {
     @Test
     void returnsJsonInsteadOfAnEmptyBodyWhenTheBrowserAcceptsOnlySse() throws Exception {
         doThrow(new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务不可用"))
-                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), any(), any());
+                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any());
 
         mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
                         .with(authentication(principal()))
@@ -165,9 +196,29 @@ class KnowledgeQaControllerTest {
     }
 
     @Test
+    void aCommittedStreamDoesNotReceiveASecondJsonBody() throws Exception {
+        doAnswer(invocation -> {
+            HttpServletResponse response = invocation.getArgument(8);
+            response.setContentType("text/event-stream");
+            response.getOutputStream().write("event: run_started\ndata: {}\n\n".getBytes(StandardCharsets.UTF_8));
+            response.flushBuffer();
+            throw new ActorTicketException();
+        }).when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any());
+
+        mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
+                        .with(authentication(principal()))
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(CONVERSATION, null, null)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("event: run_started")))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("Ticket 存储不可用"))));
+    }
+
+    @Test
     void returnsBadGatewayJsonWhenPythonReturnsAnUnexpectedStatus() throws Exception {
         doThrow(new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务返回异常状态"))
-                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), any(), any());
+                .when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any());
 
         mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
                         .with(authentication(principal()))
@@ -183,14 +234,15 @@ class KnowledgeQaControllerTest {
     @Test
     void forwardsARunFailedEventAsSse() throws Exception {
         doAnswer(invocation -> {
-            HttpServletResponse response = invocation.getArgument(7);
+            HttpServletResponse response = invocation.getArgument(8);
             response.setStatus(200);
             response.setContentType("text/event-stream;charset=UTF-8");
             response.getOutputStream().write(
                     "event: run_failed\ndata: {\"error_code\":\"rag_failed\",\"request_id\":\"trace-failed\"}\n\n"
                             .getBytes(StandardCharsets.UTF_8));
             return null;
-        }).when(agentClient).writeKnowledgeQaStream(any(), any(), any(), any(), isNull(), isNull(), eq("trace-failed"), any());
+        }).when(agentClient).writeKnowledgeQaStream(
+                any(), any(), any(), any(), isNull(), isNull(), anyBoolean(), eq("trace-failed"), any());
 
         mockMvc.perform(post("/api/v1/agent/knowledge-qa/stream")
                         .with(authentication(principal()))

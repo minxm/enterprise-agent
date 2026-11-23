@@ -8,6 +8,8 @@ from uuid import UUID
 
 from app.agents.knowledge_qa.contract_intent import AMBIGUOUS_NUMBER, MISSING_NUMBER, extract_contract_numbers
 from app.agents.knowledge_qa.nodes import _failure, _source_payload
+from app.agents.knowledge_qa.rag_call import ask_rag
+from app.agents.knowledge_qa.run_context import current_memories
 from app.core.request_context import current_request_id
 from app.tools.contract_query import ContractToolResult
 
@@ -76,11 +78,13 @@ def _policy_passages(state: dict[str, object], rag_service: object) -> tuple[str
     if not isinstance(question, str) or _POLICY.search(question) is None:
         return "", [], 0
     try:
-        result = rag_service.ask(  # type: ignore[attr-defined]
+        result = ask_rag(
+            rag_service,
             UUID(str(state["tenant_id"])),
             question,
             top_k=state.get("top_k"),
             strategy=state.get("retrieval_strategy"),
+            memories=current_memories(),
         )
     except Exception as exc:
         logger.warning(

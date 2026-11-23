@@ -27,7 +27,7 @@ import java.io.UncheckedIOException;
 import java.util.UUID;
 
 @RestController
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequestMapping("/api/v1/files")
 public class StoredFileController {
 

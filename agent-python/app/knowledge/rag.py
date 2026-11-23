@@ -96,6 +96,7 @@ class RAGService:
         *,
         top_k: int | object = _OMITTED,
         strategy: str | None = None,
+        memories: tuple[str, ...] = (),
     ) -> RAGAnswer:
         tenant, normalized, limit, selected_strategy = normalize_rag_request(
             tenant_id,
@@ -113,7 +114,7 @@ class RAGService:
             self.last_timing = _timing(outcome, 0.0, self._clock() - started, 0, retrieved_ids)
             return _empty_answer(model_name, outcome)
         selected = tuple(limit_passages(outcome.passages))
-        user_prompt = build_user_prompt(normalized, selected)
+        user_prompt = build_user_prompt(normalized, selected, memories=_preference_lines(memories))
         chat_started = self._clock()
         raw_answer = self._chat_client.complete(system=SYSTEM_PROMPT, user=user_prompt)  # type: ignore[attr-defined]
         chat_seconds = self._clock() - chat_started
@@ -252,6 +253,12 @@ def _require_model_name(chat_client: object) -> str:
     if model_name == EMBEDDING_MODEL_NAME:
         raise ChatConfigurationError("CHAT_MODEL 不能使用 Embedding 模型")
     return model_name
+
+
+def _preference_lines(memories: object) -> tuple[str, ...]:
+    if type(memories) is not tuple:
+        return ()
+    return tuple(item for item in memories if type(item) is str and item.strip())
 
 
 def _require_answer(answer: object) -> str:
