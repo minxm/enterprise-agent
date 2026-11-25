@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import pytest
 from fastapi.testclient import TestClient
 
-from app.agents.knowledge_qa.threads import ThreadLocks
+from app.agents.knowledge_qa.service import KnowledgeQAService
 from app.core.config import Settings, settings
 from app.core.internal_auth import require_gateway
 from app.core.log_safety import diagnostic
@@ -203,19 +203,9 @@ def test_readiness_reports_database_failure_without_secrets(monkeypatch):
     assert "hunter2" not in response.text
 
 
-def test_thread_locks_stay_inside_one_instance():
-    first = ThreadLocks()
-    second = ThreadLocks()
-    held = first.lock_for("kq:same-thread")
-    assert held.acquire(blocking=False)
-    try:
-        assert first.lock_for("kq:same-thread").acquire(blocking=False) is False
-        other = second.lock_for("kq:same-thread")
-        assert other is not held
-        assert other.acquire(blocking=False)
-        other.release()
-    finally:
-        held.release()
+def test_knowledge_qa_does_not_keep_a_process_local_execution_lock():
+    service = KnowledgeQAService(object())
+    assert not hasattr(service, "_locks")
 
 
 def test_dev_prepare_still_migrates(monkeypatch):

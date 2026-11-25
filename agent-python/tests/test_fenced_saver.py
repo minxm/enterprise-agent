@@ -10,6 +10,8 @@ from app.persistence.fence_context import (
     bind_current_context,
     current_fence,
     fence_scope,
+    resolve_checkpoint_tenant,
+    tenant_scope,
 )
 from app.persistence.fenced_saver import (
     FenceIntegrityError,
@@ -64,12 +66,16 @@ class _Cursor:
     def fetchone(self):
         return self._row
 
+    def fetchall(self):
+        return []
+
 
 class _Connection:
     def __init__(self, cursor: _Cursor) -> None:
         self.cursor_obj = cursor
         self.committed = False
         self.rolled_back = False
+        self.depth = 0
 
     def transaction(self):
         return self
@@ -78,9 +84,11 @@ class _Connection:
         return self.cursor_obj
 
     def __enter__(self):
+        self.depth += 1
         return self
 
     def __exit__(self, exc_type, *_args):
+        self.depth -= 1
         if exc_type is None:
             self.committed = True
         else:
@@ -366,3 +374,133 @@ def test_concurrent_contexts_do_not_trade_fences():
             return await asyncio.to_thread(lambda: current_fence().fence)
 
     assert asyncio.run(through_worker()) == 8
+
+
+def test_tenant_scope_restores_and_does_not_cross_a_bare_thread():
+    tenant = uuid4()
+    other = uuid4()
+    with tenant_scope(tenant):
+        with tenant_scope(other):
+            assert resolve_checkpoint_tenant() == other
+        assert resolve_checkpoint_tenant() == tenant
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        resolve_checkpoint_tenant()
+
+    seen: dict[str, object] = {}
+
+    def read() -> None:
+        try:
+            seen["tenant"] = resolve_checkpoint_tenant()
+        except FenceContextError:
+            seen["tenant"] = None
+
+    with tenant_scope(tenant):
+        bare = threading.Thread(target=read)
+        bare.start()
+        bare.join()
+        assert seen["tenant"] is None
+        copied = threading.Thread(target=bind_current_context(read))
+        copied.start()
+        copied.join()
+        assert seen["tenant"] == tenant
+
+    async def through_worker() -> object:
+        with tenant_scope(tenant):
+            return await asyncio.to_thread(resolve_checkpoint_tenant)
+
+    assert asyncio.run(through_worker()) == tenant
+
+
+def test_checkpoint_reads_without_a_tenant_do_not_borrow_a_connection(monkeypatch):
+    tenant = uuid4()
+    thread_id = _thread(tenant)
+    saver, _connection = _saver(_Cursor(), monkeypatch)
+
+    def unexpected(_conn):
+        raise AssertionError("connection borrowed")
+
+    monkeypatch.setattr("app.persistence.fenced_saver.get_connection", unexpected)
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        saver.get_tuple(_config(thread_id))
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        list(saver.list(_config(thread_id)))
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        saver.delete_thread(thread_id)
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        saver.prune([thread_id], strategy="delete")
+    with pytest.raises(FenceContextError, match="租户上下文缺失"):
+        saver.get_delta_channel_history(config=_config(thread_id), channels=["messages"])
+    with pytest.raises(RuntimeError, match="Checkpointer DDL"):
+        saver.setup()
+
+
+def test_get_tuple_and_list_keep_the_tenant_transaction_open(monkeypatch):
+    tenant = uuid4()
+    thread_id = _thread(tenant)
+    cursor = _Cursor()
+    answers = [{"set_config": str(tenant)}, {"current_setting": str(tenant)}, None]
+
+    def fetchone():
+        if answers:
+            return answers.pop(0)
+        return {"current_setting": str(tenant)}
+
+    cursor.fetchone = fetchone
+    saver, connection = _saver(cursor, monkeypatch)
+    depths: list[int] = []
+    original = cursor.execute
+
+    def execute(statement, params=None):
+        depths.append(connection.depth)
+        return original(statement, params)
+
+    cursor.execute = execute
+    with tenant_scope(tenant):
+        assert saver.get_tuple(_config(thread_id)) is None
+    assert depths and all(item > 0 for item in depths)
+    assert connection.depth == 0
+
+    cursor.fetchall = lambda: [{"checkpoint": {"v": 4}, "parent_checkpoint_id": None}]
+    saver._load_checkpoint_tuple = lambda _value: connection.depth
+    with tenant_scope(tenant):
+        loaded = list(saver.list(_config(thread_id), limit=1))
+    assert loaded == [2]
+    assert connection.depth == 0
+
+
+def test_delete_and_prune_require_the_current_tenant(monkeypatch):
+    tenant = uuid4()
+    thread_id = _thread(tenant)
+    foreign = _thread(uuid4())
+    cursor = _Cursor()
+    saver, connection = _saver(cursor, monkeypatch)
+    with tenant_scope(tenant):
+        with pytest.raises(FenceContextError, match="不一致"):
+            saver.delete_thread(foreign)
+        with pytest.raises(FenceContextError, match="不一致"):
+            saver.prune([foreign], strategy="delete")
+    assert cursor.statements == []
+    with tenant_scope(tenant):
+        saver.delete_thread(thread_id)
+        saver.prune([thread_id], strategy="delete")
+    assert any(sql.startswith("DELETE FROM checkpoints") for sql in cursor.statements)
+    assert any(sql.startswith("DELETE FROM checkpoint_blobs") for sql in cursor.statements)
+    assert any(sql.startswith("DELETE FROM checkpoint_writes") for sql in cursor.statements)
+    assert connection.depth == 0
+    with tenant_scope(tenant):
+        with pytest.raises(FenceContextError, match="尚未纳入租户事务"):
+            saver.get_delta_channel_history(config=_config(thread_id), channels=["messages"])
+
+
+def test_a_different_tenant_scope_cannot_use_another_fence(monkeypatch):
+    tenant = uuid4()
+    thread_id = _thread(tenant)
+    cursor = _Cursor()
+    saver, _connection = _saver(cursor, monkeypatch)
+    checkpoint, versions = _checkpoint("cp-scope")
+    with tenant_scope(uuid4()):
+        with fence_scope(tenant, thread_id, 1):
+            with pytest.raises(FenceContextError, match="租户上下文不一致"):
+                saver.put(_config(thread_id), checkpoint, {"source": "loop", "step": 1}, versions)
+    assert cursor.statements == []
+

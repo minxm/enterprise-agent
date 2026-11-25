@@ -19,6 +19,7 @@ from app.knowledge.rag import RAGAnswer, RAGSource
 from app.persistence.checkpoint import CheckpointResources
 from app.persistence.migrate import apply_migrations
 from app.persistence.postgres import build_conninfo
+from qa_execution import ExecutionLease, ExecutionUnavailable
 
 TENANT_A = UUID("00000000-0000-4000-8000-00000000e273")
 TENANT_B = UUID("00000000-0000-4000-8000-00000000e274")
@@ -76,6 +77,21 @@ def checkpoint_db():
         resources.close()
 
 
+@pytest.fixture(scope="module")
+def execution(checkpoint_db):
+    resources, _password = checkpoint_db
+    try:
+        lease = ExecutionLease.open(_root_env())
+    except ExecutionUnavailable as exc:
+        pytest.skip(f"Redis 不可用，跳过执行链路测试: {exc.__class__.__name__}")
+    lease.track(TENANT_A)
+    lease.track(TENANT_B)
+    try:
+        yield lease
+    finally:
+        lease.close(resources.pool)
+
+
 @pytest.mark.postgres
 def test_checkpoint_tables_are_in_the_agent_schema_and_runtime_has_no_create(checkpoint_db):
     resources, _password = checkpoint_db
@@ -101,10 +117,10 @@ def test_checkpoint_tables_are_in_the_agent_schema_and_runtime_has_no_create(che
 
 
 @pytest.mark.postgres
-def test_postgres_thread_persists_across_a_new_graph(checkpoint_db):
+def test_postgres_thread_persists_across_a_new_graph(checkpoint_db, execution):
     resources, password = checkpoint_db
     rag = ScriptedRAG([_answer("第一轮", degraded=True), _answer("第二轮"), _answer("重建后")])
-    first_service = KnowledgeQAService(rag, checkpointer=resources.saver)
+    first_service = execution.service(rag, resources.saver)
     conversation = uuid4()
 
     first = first_service.ask(TENANT_A, "第一题", conversation_id=conversation)
@@ -115,7 +131,7 @@ def test_postgres_thread_persists_across_a_new_graph(checkpoint_db):
     rebuilt.open()
     try:
         assert rebuilt.saver is not None
-        resumed = KnowledgeQAService(rag, checkpointer=rebuilt.saver)
+        resumed = execution.service(rag, rebuilt.saver)
         third = resumed.ask(TENANT_A, "第三题", conversation_id=conversation)
     finally:
         rebuilt.close()
@@ -134,10 +150,10 @@ def test_postgres_thread_persists_across_a_new_graph(checkpoint_db):
 
 
 @pytest.mark.postgres
-def test_postgres_threads_are_isolated_by_tenant_and_actor(checkpoint_db):
+def test_postgres_threads_are_isolated_by_tenant_and_actor(checkpoint_db, execution):
     resources, _password = checkpoint_db
     rag = ScriptedRAG([_answer("甲"), _answer("乙"), _answer("不应执行")])
-    service = KnowledgeQAService(rag, checkpointer=resources.saver)
+    service = execution.service(rag, resources.saver)
     conversation = uuid4()
 
     owned = service.ask(TENANT_A, "甲的问题", conversation_id=conversation, actor_id=ACTOR_A)
@@ -154,10 +170,10 @@ def test_postgres_threads_are_isolated_by_tenant_and_actor(checkpoint_db):
 
 
 @pytest.mark.postgres
-def test_postgres_read_history_returns_turns_without_writing(checkpoint_db):
+def test_postgres_read_history_returns_turns_without_writing(checkpoint_db, execution):
     resources, _password = checkpoint_db
     rag = ScriptedRAG([_answer("第一轮"), _answer("第二轮")])
-    service = KnowledgeQAService(rag, checkpointer=resources.saver)
+    service = execution.service(rag, resources.saver)
     conversation = uuid4()
     thread_id = thread_id_for(TENANT_A, conversation)
     service.ask(TENANT_A, "第一题", conversation_id=conversation, actor_id=ACTOR_A)
@@ -184,12 +200,12 @@ def test_postgres_read_history_returns_turns_without_writing(checkpoint_db):
 
 
 @pytest.mark.postgres
-def test_closed_checkpoint_pool_returns_a_safe_error(checkpoint_db):
+def test_closed_checkpoint_pool_returns_a_safe_error(checkpoint_db, execution):
     resources, password = checkpoint_db
     standalone = CheckpointResources(resources.conninfo, resources.secret)
     standalone.open()
     rag = ScriptedRAG([_answer("第一轮"), _answer("断开后")])
-    service = KnowledgeQAService(rag, checkpointer=standalone.saver)
+    service = execution.service(rag, standalone.saver)
     conversation = uuid4()
     service.ask(TENANT_A, "第一题", conversation_id=conversation)
     standalone.close()
@@ -206,27 +222,31 @@ def test_closed_checkpoint_pool_returns_a_safe_error(checkpoint_db):
 
 def _checkpoint_count(resources: CheckpointResources, thread_id: str) -> int:
     with resources.pool.connection() as connection:
-        row = connection.execute(
-            "select count(*) as count from agent.checkpoints where thread_id = %s",
-            (thread_id,),
-        ).fetchone()
+        with connection.transaction():
+            connection.execute("select set_config('app.tenant_id', %s, true)", (_tenant_of(thread_id),))
+            row = connection.execute(
+                "select count(*) as count from agent.checkpoints where thread_id = %s",
+                (thread_id,),
+            ).fetchone()
     return int(row["count"])
 
 
 def _stored_text(resources: CheckpointResources, thread_id: str) -> str:
     with resources.pool.connection() as connection:
-        rows = connection.execute(
-            """
-            select checkpoint::text as checkpoint, metadata::text as metadata
-            from agent.checkpoints
-            where thread_id = %s
-            """,
-            (thread_id,),
-        ).fetchall()
-        blobs = connection.execute(
-            "select blob from agent.checkpoint_blobs where thread_id = %s",
-            (thread_id,),
-        ).fetchall()
+        with connection.transaction():
+            connection.execute("select set_config('app.tenant_id', %s, true)", (_tenant_of(thread_id),))
+            rows = connection.execute(
+                """
+                select checkpoint::text as checkpoint, metadata::text as metadata
+                from agent.checkpoints
+                where thread_id = %s
+                """,
+                (thread_id,),
+            ).fetchall()
+            blobs = connection.execute(
+                "select blob from agent.checkpoint_blobs where thread_id = %s",
+                (thread_id,),
+            ).fetchall()
     parts = [row["checkpoint"] + row["metadata"] for row in rows]
     for blob in blobs:
         payload = blob["blob"]
@@ -243,9 +263,11 @@ def _delete_threads(resources: CheckpointResources, *tenants: UUID) -> None:
     for tenant in tenants:
         prefix = f"kq:{tenant}:%"
         with resources.pool.connection() as connection:
-            connection.execute("delete from agent.checkpoint_writes where thread_id like %s", (prefix,))
-            connection.execute("delete from agent.checkpoint_blobs where thread_id like %s", (prefix,))
-            connection.execute("delete from agent.checkpoints where thread_id like %s", (prefix,))
+            with connection.transaction():
+                connection.execute("select set_config('app.tenant_id', %s, true)", (str(tenant),))
+                connection.execute("delete from agent.checkpoint_writes where thread_id like %s", (prefix,))
+                connection.execute("delete from agent.checkpoint_blobs where thread_id like %s", (prefix,))
+                connection.execute("delete from agent.checkpoints where thread_id like %s", (prefix,))
 
 
 def _answer(text: str, *, degraded: bool = False) -> RAGAnswer:
@@ -258,6 +280,12 @@ def _answer(text: str, *, degraded: bool = False) -> RAGAnswer:
         degraded=degraded,
         degradation_reason="rerank timeout" if degraded else None,
     )
+
+
+def _tenant_of(thread_id: str) -> str:
+    """Test observation only: the thread was created by this test."""
+    _prefix, tenant, _conversation = thread_id.split(":")
+    return tenant
 
 
 def _settings(env: dict[str, str]) -> Settings:

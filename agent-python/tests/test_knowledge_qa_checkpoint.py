@@ -6,6 +6,7 @@ from psycopg import OperationalError
 
 from app.agents.knowledge_qa.nodes import MAX_CONVERSATION_TURNS
 from app.agents.knowledge_qa.service import HistoryMessage, KnowledgeQAService, _apply_citation_text, _load_citation_text
+from lease_fakes import FakeThreadLock
 from app.agents.knowledge_qa.threads import thread_id_for
 from app.knowledge.rag import RAGAnswer, RAGSource
 
@@ -148,17 +149,20 @@ def test_checkpoint_disconnect_does_not_expose_the_database_error():
 
 def test_same_thread_rejects_an_overlapping_run():
     rag = ScriptedRAG([_answer("不会执行")])
-    service = KnowledgeQAService(rag, checkpointer=MemorySaver())
+    lock = FakeThreadLock()
+    service = KnowledgeQAService(rag, checkpointer=MemorySaver(), thread_lock=lock)
     conversation = uuid4()
-    lock = service._locks.lock_for(thread_id_for(TENANT_A, conversation))
-    assert lock.acquire(blocking=False)
+    thread_id = thread_id_for(TENANT_A, conversation)
+    lock.hold(TENANT_A, thread_id)
     try:
         result = service.ask(TENANT_A, "并发问题", conversation_id=conversation)
     finally:
-        lock.release()
+        lock.release_hold(TENANT_A, thread_id)
+        service.close()
 
     assert result.error_code == "thread_busy"
     assert rag.calls == []
+    assert lock.renews == 0
 
 
 def test_conversation_history_drops_the_oldest_turn():
@@ -279,14 +283,16 @@ def test_other_actor_and_tenant_cannot_read_history_or_run_rag():
 
 def test_read_history_does_not_bypass_a_busy_thread():
     rag = ScriptedRAG([_answer("不应执行")])
-    service = KnowledgeQAService(rag, checkpointer=MemorySaver())
+    lock = FakeThreadLock()
+    service = KnowledgeQAService(rag, checkpointer=MemorySaver(), thread_lock=lock)
     conversation = uuid4()
-    lock = service._locks.lock_for(thread_id_for(TENANT_A, conversation))
-    assert lock.acquire(blocking=False)
+    thread_id = thread_id_for(TENANT_A, conversation)
+    lock.hold(TENANT_A, thread_id)
     try:
         history = service.read_history(TENANT_A, conversation, ACTOR_A)
     finally:
-        lock.release()
+        lock.release_hold(TENANT_A, thread_id)
+        service.close()
 
     assert history.error_code == "thread_busy"
     assert history.messages == ()

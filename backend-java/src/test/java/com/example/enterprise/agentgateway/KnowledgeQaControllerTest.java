@@ -335,7 +335,7 @@ class KnowledgeQaControllerTest {
 
     @Test
     void readsHistoryForTheAuthenticatedOwner() throws Exception {
-        when(agentClient.readKnowledgeQaHistory(TENANT, USER, CONVERSATION)).thenReturn(List.of(
+        when(agentClient.readKnowledgeQaHistory(TENANT, USER, CONVERSATION, false)).thenReturn(List.of(
                 new HistoryMessage("user", "第一题", "answered", List.of(), List.of()),
                 new HistoryMessage("assistant", "部门负责人审批", "answered", List.of("chunk-1"),
                         List.of(new HistorySource("chunk-1", "付款申请须先由部门负责人审批。")))));
@@ -354,7 +354,7 @@ class KnowledgeQaControllerTest {
                 .andExpect(jsonPath("$.data.thread_id").doesNotExist());
 
         verify(conversations).requireOwned(TENANT, USER, CONVERSATION);
-        verify(agentClient).readKnowledgeQaHistory(TENANT, USER, CONVERSATION);
+        verify(agentClient).readKnowledgeQaHistory(TENANT, USER, CONVERSATION, false);
     }
 
     @Test
@@ -366,13 +366,13 @@ class KnowledgeQaControllerTest {
                         .with(authentication(principal())))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("会话不存在"));
-        verify(agentClient, never()).readKnowledgeQaHistory(any(), any(), any());
+        verify(agentClient, never()).readKnowledgeQaHistory(any(), any(), any(), anyBoolean());
     }
 
     @Test
     void returnsASafeErrorWhenHistoryPythonIsUnavailable() throws Exception {
         doThrow(new AgentServiceException(HttpStatus.BAD_GATEWAY, "Agent 服务返回异常状态"))
-                .when(agentClient).readKnowledgeQaHistory(TENANT, USER, CONVERSATION);
+                .when(agentClient).readKnowledgeQaHistory(TENANT, USER, CONVERSATION, false);
 
         mockMvc.perform(get("/api/v1/agent/conversations/" + CONVERSATION + "/messages")
                         .with(authentication(principal())))

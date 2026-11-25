@@ -1,4 +1,4 @@
-"""One long-lived PostgresSaver for Knowledge QA threads.
+"""One long-lived fenced checkpoint saver for Knowledge QA threads.
 
 The pool is opened with the process and closed with it. Requests borrow a
 connection from that pool. This module does not call PostgresSaver.setup();
@@ -7,10 +7,10 @@ migration 004 owns the tables.
 
 from __future__ import annotations
 
-from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from app.persistence.fenced_saver import FencedPostgresSaver
 from app.persistence.postgres import _public_error, reject_superuser
 
 
@@ -19,7 +19,7 @@ class CheckpointResources:
         self.conninfo = conninfo
         self.secret = secret
         self.pool: ConnectionPool | None = None
-        self.saver: PostgresSaver | None = None
+        self.saver: FencedPostgresSaver | None = None
 
     def open(self) -> None:
         pool = ConnectionPool(
@@ -43,7 +43,7 @@ class CheckpointResources:
             pool.close()
             raise _public_error("工作流状态存储连接失败", exc, self.secret) from exc
         self.pool = pool
-        self.saver = PostgresSaver(pool)
+        self.saver = FencedPostgresSaver(pool)
 
     def close(self) -> None:
         pool = self.pool

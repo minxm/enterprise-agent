@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -52,6 +53,18 @@ class ContractRecord:
     current_version: ContractVersionRecord | None
 
 
+@dataclass(frozen=True)
+class KnowledgeQaGrant:
+    tenant_id: UUID
+    actor_id: UUID
+    conversation_id: UUID
+    action: str
+    allow_tenant_read: bool
+
+
+_KNOWLEDGE_ACTIONS = frozenset({"knowledge_qa_stream", "knowledge_qa_history"})
+
+
 class JavaBackendClient:
     def __init__(self, base_url: str, token: str, *, timeout: float = 5.0, transport: httpx.BaseTransport | None = None) -> None:
         self._token = token
@@ -84,6 +97,51 @@ class JavaBackendClient:
         if not isinstance(data, dict):
             raise JavaBackendError("invalid_response", "合同数据无法解析")
         return _record(data)
+
+    def redeem_knowledge_qa_ticket(self, ticket: str) -> KnowledgeQaGrant:
+        """Redeem a one-time Knowledge QA grant. The ticket is not logged."""
+        if not isinstance(ticket, str) or not ticket:
+            raise JavaBackendError("unauthorized", "未认证")
+        try:
+            response = self._client.get(
+                "/internal/v1/knowledge-qa/tickets/redeem",
+                headers={
+                    "X-Agent-Token": self._token,
+                    "X-Knowledge-Qa-Ticket": ticket,
+                    "Accept": "application/json",
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise JavaBackendError("unavailable", "身份授权暂时不可用") from exc
+        if response.status_code == 401:
+            raise JavaBackendError("unauthorized", "未认证")
+        if response.status_code != 200:
+            raise JavaBackendError("unavailable", "身份授权暂时不可用")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise JavaBackendError("unavailable", "身份授权暂时不可用") from exc
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise JavaBackendError("unavailable", "身份授权暂时不可用")
+        return _grant(data)
+
+
+def _grant(data: dict[str, Any]) -> KnowledgeQaGrant:
+    try:
+        action = data["action"]
+        allow = data["allowTenantRead"]
+        if action not in _KNOWLEDGE_ACTIONS or type(allow) is not bool:
+            raise ValueError("claim")
+        return KnowledgeQaGrant(
+            tenant_id=UUID(str(data["tenantId"])),
+            actor_id=UUID(str(data["actorId"])),
+            conversation_id=UUID(str(data["conversationId"])),
+            action=action,
+            allow_tenant_read=allow,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JavaBackendError("unauthorized", "未认证") from exc
 
 
 def _record(data: dict[str, Any]) -> ContractRecord:

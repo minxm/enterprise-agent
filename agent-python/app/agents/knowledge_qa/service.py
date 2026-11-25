@@ -12,6 +12,7 @@ not replace ask().
 from __future__ import annotations
 
 import logging
+import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -26,10 +27,20 @@ from psycopg_pool import PoolClosed, PoolTimeout
 from app.agents.knowledge_qa.builder import build_knowledge_qa_graph
 from app.agents.knowledge_qa.events import public_text
 from app.agents.knowledge_qa.intent import RECALL_INTENTS, classify_intent
+from app.agents.knowledge_qa.lease import ActiveLease, LeaseBridge, LeaseLoop
 from app.agents.knowledge_qa.nodes import _failure, format_response, validate_input
 from app.agents.knowledge_qa.run_context import RunContext
 from app.memory.context import MemoryAccessContext
-from app.agents.knowledge_qa.threads import ThreadAccessError, ThreadLocks, assert_thread_access, parse_uuid, thread_id_for
+from app.agents.knowledge_qa.threads import ThreadAccessError, assert_thread_access, parse_uuid, thread_id_for
+from app.persistence.fence_context import (
+    EXECUTION_TOKEN_KEY,
+    fence_scope,
+    register_execution,
+    tenant_scope,
+    unregister_execution,
+)
+from app.persistence.fenced_saver import FencedPostgresSaver, FencingViolation
+from app.persistence.redis_thread_lock import LOCK_RENEW_INTERVAL_SECONDS, LockAcquired, LockBusy
 from app.tools.contract_context import bind_actor_ticket, reset_actor_ticket
 from app.core.request_context import current_request_id, reset_request_id, set_request_id
 
@@ -86,6 +97,10 @@ class KnowledgeQAService:
         checkpointer: object | None = None,
         contract_tool: object | None = None,
         memory: object | None = None,
+        thread_lock: object | None = None,
+        fence_store: object | None = None,
+        lease_loop: object | None = None,
+        renew_interval_seconds: float = LOCK_RENEW_INTERVAL_SECONDS,
     ) -> None:
         default_top_k = getattr(rag_service, "_default_top_k", 5)
         default_strategy = getattr(rag_service, "_default_strategy", "vector")
@@ -94,7 +109,18 @@ class KnowledgeQAService:
         self._rag = rag_service
         self._memory = memory
         self._checkpointer = checkpointer
-        self._locks = ThreadLocks()
+        self._thread_lock = thread_lock
+        self._fence_store = fence_store
+        if isinstance(renew_interval_seconds, bool) or not isinstance(renew_interval_seconds, (int, float)):
+            raise ValueError("续租间隔不合法")
+        if not 0 < float(renew_interval_seconds) <= LOCK_RENEW_INTERVAL_SECONDS:
+            raise ValueError("续租间隔不合法")
+        self._renew_interval = float(renew_interval_seconds)
+        self._owned_loop: LeaseLoop | None = None
+        if thread_lock is not None and lease_loop is None:
+            self._owned_loop = LeaseLoop()
+            lease_loop = self._owned_loop.loop
+        self._bridge = LeaseBridge(lease_loop) if lease_loop is not None else None
         self._graph = build_knowledge_qa_graph(
             rag_service,
             contract_tool=contract_tool,
@@ -102,6 +128,12 @@ class KnowledgeQAService:
             default_strategy=self._default_strategy,
             checkpointer=checkpointer,
         )
+
+    def close(self) -> None:
+        owned = self._owned_loop
+        self._owned_loop = None
+        if owned is not None:
+            owned.close()
 
     def ask(
         self,
@@ -146,18 +178,21 @@ class KnowledgeQAService:
         tenant = parse_uuid(tenant_id)
         actor = parse_uuid(actor_id) if actor_id is not None else None
         if self._checkpointer is None:
-            return self._invoke(payload, None, self._recall_context(payload, tenant, actor, allow_tenant_read))
+            return self._invoke(payload, None, self._recall_context(payload, tenant, actor, allow_tenant_read), None, None)
         conversation = parse_uuid(conversation_id)
         if tenant is None or conversation is None or (actor_id is not None and actor is None):
             return self._reject_scope(payload, tenant, conversation, actor_id, actor)
-        with self._open_thread(tenant, conversation, actor) as (kind, config):
+        control = RunControl()
+        with self._open_thread(tenant, conversation, actor, execute=True, control=control) as (kind, config, lease):
             if kind == "busy":
                 return _result(_failure("failed", "thread_busy", "同一个会话正在执行，请等待本次完成后再继续。"))
             if kind == "unavailable":
                 return _checkpoint_unavailable()
+            if kind == "lease_unavailable":
+                return _lease_failure("lease_unavailable")
             if kind == "forbidden":
                 return _result(_failure("failed", "thread_forbidden", "无权访问该会话。"))
-            return self._invoke(payload, config, self._recall_context(payload, tenant, actor, allow_tenant_read))
+            return self._invoke(payload, config, self._recall_context(payload, tenant, actor, allow_tenant_read), control, lease)
 
     def stream_events(
         self,
@@ -187,24 +222,29 @@ class KnowledgeQAService:
             actor = parse_uuid(actor_id) if actor_id is not None else None
             if self._checkpointer is None:
                 context = self._recall_context(payload, tenant, actor, allow_tenant_read)
-                yield from self._play(payload, None, request_id, _conversation_text(conversation_id), control, context)
+                yield from self._play(payload, None, request_id, _conversation_text(conversation_id), control, context, None)
                 return
             conversation = parse_uuid(conversation_id)
             if tenant is None or conversation is None or (actor_id is not None and actor is None):
                 yield from self._play_rejection(payload, tenant, conversation, actor_id, actor, request_id)
                 return
-            with self._open_thread(tenant, conversation, actor) as (kind, config):
+            if control is None:
+                control = RunControl()
+            with self._open_thread(tenant, conversation, actor, execute=True, control=control) as (kind, config, lease):
                 if kind == "busy":
                     yield _failed(request_id, "thread_busy", "同一个会话正在执行，请等待本次完成后再继续。")
                     return
                 if kind == "unavailable":
                     yield _failed(request_id, "checkpoint_unavailable", "工作流状态暂时不可用")
                     return
+                if kind == "lease_unavailable":
+                    yield _failed(request_id, "lease_unavailable", "会话锁暂时不可用")
+                    return
                 if kind == "forbidden":
                     yield _failed(request_id, "thread_forbidden", "无权访问该会话。")
                     return
                 context = self._recall_context(payload, tenant, actor, allow_tenant_read)
-                yield from self._play(payload, config, request_id, str(conversation), control, context)
+                yield from self._play(payload, config, request_id, str(conversation), control, context, lease)
         finally:
             reset_actor_ticket(ticket)
             if token is not None:
@@ -228,11 +268,13 @@ class KnowledgeQAService:
             return HistoryResult(error_code="invalid_input", error_message="请求参数不合法")
         if self._checkpointer is None:
             return HistoryResult(error_code="checkpoint_unavailable", error_message="工作流状态暂时不可用")
-        with self._open_thread(tenant, conversation, actor) as (kind, config):
+        with self._open_thread(tenant, conversation, actor, execute=False, control=None) as (kind, config, _lease):
             if kind == "busy":
                 return HistoryResult(error_code="thread_busy", error_message="同一个会话正在执行，请等待本次完成后再继续。")
             if kind == "unavailable":
                 return HistoryResult(error_code="checkpoint_unavailable", error_message="工作流状态暂时不可用")
+            if kind == "lease_unavailable":
+                return HistoryResult(error_code="lease_unavailable", error_message="会话锁暂时不可用")
             if kind == "forbidden":
                 return HistoryResult(error_code="thread_forbidden", error_message="会话不存在")
             try:
@@ -289,6 +331,7 @@ class KnowledgeQAService:
         conversation_id: str | None,
         control: RunControl | None,
         run_context: RunContext,
+        lease: ActiveLease | None,
     ) -> Iterator[Event]:
         finished = False
         try:
@@ -321,8 +364,17 @@ class KnowledgeQAService:
                         break
             except GraphDrained:
                 drained = True
+            except FencingViolation:
+                yield _failed(request_id, "lease_lost", "会话执行权已丢失")
+                finished = True
+                return
             except _CHECKPOINT_ERRORS:
                 yield _failed(request_id, "checkpoint_unavailable", "工作流状态暂时不可用")
+                finished = True
+                return
+            lost = _lease_event(lease, request_id)
+            if lost is not None:
+                yield lost
                 finished = True
                 return
             if drained:
@@ -348,6 +400,7 @@ class KnowledgeQAService:
             finished = True
         except Exception as exc:
             if not finished:
+                logger.warning("knowledge qa play failed error=%s", exc.__class__.__name__)
                 yield _failed(request_id, "run_failed", exc.__class__.__name__)
 
     def _reject_scope(
@@ -369,52 +422,138 @@ class KnowledgeQAService:
         )
         return _result(state)
 
+    def _writes_require_fence(self) -> bool:
+        return isinstance(self._checkpointer, FencedPostgresSaver)
+
     @contextmanager
     def _open_thread(
         self,
         tenant: UUID,
         conversation: UUID,
         actor: UUID | None,
-    ) -> Iterator[tuple[str, dict[str, object] | None]]:
-        thread_id = thread_id_for(tenant, conversation)
-        lock = self._locks.lock_for(thread_id)
-        if not lock.acquire(blocking=False):
-            yield "busy", None
+        *,
+        execute: bool,
+        control: RunControl | None,
+    ) -> Iterator[tuple[str, dict[str, object] | None, ActiveLease | None]]:
+        if self._thread_lock is None or self._bridge is None:
+            if self._writes_require_fence():
+                yield "lease_unavailable", None, None
+                return
+            with self._open_without_lease(tenant, conversation, actor) as opened:
+                yield opened
             return
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "tenant_id": str(tenant),
-                "conversation_id": str(conversation),
-                "actor_id": "" if actor is None else str(actor),
-            }
-        }
+        thread_id = thread_id_for(tenant, conversation)
+        lease: ActiveLease | None = None
         try:
+            try:
+                acquired = self._bridge.call(self._thread_lock.acquire(tenant, thread_id))  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.warning("knowledge qa lease acquire failed error=%s", type(exc).__name__)
+                yield "lease_unavailable", None, None
+                return
+            if isinstance(acquired, LockBusy):
+                yield "busy", None, None
+                return
+            if not isinstance(acquired, LockAcquired):
+                yield "lease_unavailable", None, None
+                return
+            lease = ActiveLease(
+                self._thread_lock,
+                self._bridge,
+                tenant,
+                thread_id,
+                acquired.token,
+                self._renew_interval,
+                control if execute else None,
+            )
+            if execute:
+                try:
+                    lease.start()
+                except Exception as exc:
+                    logger.warning("knowledge qa renew start failed error=%s", type(exc).__name__)
+                    lease.reason = "lease_unavailable"
+                    lease.lost.set()
+                    yield "lease_unavailable", None, None
+                    return
+            with tenant_scope(tenant):
+                config = _thread_config(tenant, conversation, actor, thread_id)
+                try:
+                    saved = self._checkpointer.get_tuple(config)  # type: ignore[attr-defined]
+                except _CHECKPOINT_ERRORS:
+                    yield "unavailable", None, None
+                    return
+                try:
+                    assert_thread_access(saved, tenant_id=tenant, actor_id=actor)
+                except ThreadAccessError:
+                    yield "forbidden", None, None
+                    return
+                if not execute or not self._writes_require_fence():
+                    yield "ready", config, lease
+                    return
+                if self._fence_store is None:
+                    yield "lease_unavailable", None, None
+                    return
+                try:
+                    fence = self._fence_store.next_fence(tenant, thread_id)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    logger.warning("knowledge qa fence allocation failed error=%s", type(exc).__name__)
+                    yield "lease_unavailable", None, None
+                    return
+                execution_token = secrets.token_urlsafe(32)
+                register_execution(execution_token, tenant, thread_id, fence)
+                config = _thread_config(tenant, conversation, actor, thread_id, execution_token)
+                try:
+                    with fence_scope(tenant, thread_id, fence):
+                        yield "ready", config, lease
+                finally:
+                    unregister_execution(execution_token)
+        finally:
+            if lease is not None:
+                lease.close()
+                logger.info("knowledge qa thread lease released threadId=%s", thread_id)
+
+    @contextmanager
+    def _open_without_lease(
+        self,
+        tenant: UUID,
+        conversation: UUID,
+        actor: UUID | None,
+    ) -> Iterator[tuple[str, dict[str, object] | None, ActiveLease | None]]:
+        """In-memory graphs have no distributed lease and do not allocate a fence."""
+        thread_id = thread_id_for(tenant, conversation)
+        with tenant_scope(tenant):
+            config = _thread_config(tenant, conversation, actor, thread_id)
             try:
                 saved = self._checkpointer.get_tuple(config)  # type: ignore[attr-defined]
             except _CHECKPOINT_ERRORS:
-                yield "unavailable", None
+                yield "unavailable", None, None
                 return
             try:
                 assert_thread_access(saved, tenant_id=tenant, actor_id=actor)
             except ThreadAccessError:
-                yield "forbidden", None
+                yield "forbidden", None, None
                 return
-            yield "ready", config
-        finally:
-            lock.release()
-            logger.info("knowledge qa thread lock released threadId=%s", thread_id)
+            yield "ready", config, None
 
     def _invoke(
         self,
         payload: dict[str, object],
         config: dict[str, object] | None,
         run_context: RunContext,
+        control: RunControl | None,
+        lease: ActiveLease | None,
     ) -> KnowledgeQAResult:
         try:
-            state = self._graph.invoke(payload, config, context=run_context)
+            state = self._graph.invoke(payload, config, context=run_context, control=control)
+        except GraphDrained:
+            return _lease_failure(lease.reason if lease is not None else None)
+        except FencingViolation:
+            return _lease_failure("lease_lost")
         except _CHECKPOINT_ERRORS:
             return _checkpoint_unavailable()
+        lost = _lease_event(lease, "")
+        if lost is not None:
+            return _lease_failure(lease.reason if lease is not None else None)
         return _result(state)
 
     def _recall_context(
@@ -601,6 +740,38 @@ def _knowledge_pool(rag: object) -> object | None:
 
 def _checkpoint_unavailable() -> KnowledgeQAResult:
     return _result(_failure("failed", "checkpoint_unavailable", "工作流状态暂时不可用"))
+
+
+def _lease_failure(reason: str | None) -> KnowledgeQAResult:
+    if reason == "lease_unavailable":
+        return _result(_failure("failed", "lease_unavailable", "会话锁暂时不可用"))
+    return _result(_failure("failed", "lease_lost", "会话执行权已丢失"))
+
+
+def _lease_event(lease: ActiveLease | None, request_id: str) -> Event | None:
+    if lease is None or not lease.lost.is_set():
+        return None
+    if lease.reason == "lease_unavailable":
+        return _failed(request_id, "lease_unavailable", "会话锁暂时不可用")
+    return _failed(request_id, "lease_lost", "会话执行权已丢失")
+
+
+def _thread_config(
+    tenant: UUID,
+    conversation: UUID,
+    actor: UUID | None,
+    thread_id: str,
+    execution_token: str | None = None,
+) -> dict[str, object]:
+    configurable: dict[str, object] = {
+        "thread_id": thread_id,
+        "tenant_id": str(tenant),
+        "conversation_id": str(conversation),
+        "actor_id": "" if actor is None else str(actor),
+    }
+    if execution_token is not None:
+        configurable[EXECUTION_TOKEN_KEY] = execution_token
+    return {"configurable": configurable}
 
 
 def _result(state: dict[str, object]) -> KnowledgeQAResult:

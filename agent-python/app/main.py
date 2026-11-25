@@ -15,6 +15,8 @@ from app.core.logging_config import configure_logging
 from app.core.request_middleware import RequestIdMiddleware
 from app.persistence import infra
 from app.persistence.migrate import prepare_database
+from app.persistence.redis_thread_lock import RedisThreadLock
+from app.persistence.thread_fence import ThreadFenceStore
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -30,14 +32,23 @@ async def lifespan(_app: FastAPI):
         saver = None if infra.checkpoints is None else infra.checkpoints.saver
         if pool is not None:
             _app.state.memory = MemoryService(pool)
-        if pool is not None and saver is not None:
+        redis = None if infra.redis is None or not infra.redis.opened else infra.redis.client
+        if pool is not None and saver is not None and redis is not None:
             try:
-                runtime = build_knowledge_qa_runtime(current, pool, saver)
+                runtime = build_knowledge_qa_runtime(
+                    current,
+                    pool,
+                    saver,
+                    thread_lock=RedisThreadLock(redis),
+                    fence_store=ThreadFenceStore(pool),
+                    lease_loop=asyncio.get_running_loop(),
+                )
             except Exception as exc:
                 logger.warning("知识问答运行时未装配 error=%s", exc.__class__.__name__)
             else:
                 _app.state.knowledge_qa = runtime.service
                 _app.state.knowledge_qa_runtime = runtime
+                _app.state.knowledge_qa_grants = runtime.grants
     try:
         yield
     finally:
@@ -46,6 +57,7 @@ async def lifespan(_app: FastAPI):
             await asyncio.to_thread(runtime.close)
             _app.state.knowledge_qa = None
             _app.state.knowledge_qa_runtime = None
+            _app.state.knowledge_qa_grants = None
         _app.state.memory = None
         await infra.close()
 

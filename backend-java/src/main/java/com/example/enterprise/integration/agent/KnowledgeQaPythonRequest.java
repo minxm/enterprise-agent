@@ -6,12 +6,10 @@ import java.util.UUID;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record KnowledgeQaPythonRequest(
-        @JsonProperty("tenant_id") UUID tenantId,
-        @JsonProperty("actor_id") UUID actorId,
         @JsonProperty("conversation_id") UUID conversationId,
         String question,
         @JsonProperty("top_k") Integer topK,
         @JsonProperty("retrieval_strategy") String retrievalStrategy,
         @JsonProperty("actor_ticket") String actorTicket,
-        @JsonProperty("allow_tenant_read") boolean allowTenantRead) {
+        @JsonProperty("knowledge_qa_ticket") String knowledgeQaTicket) {
 }

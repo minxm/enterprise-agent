@@ -19,6 +19,7 @@ from app.memory.service import MemoryService
 from app.persistence.checkpoint import CheckpointResources
 from app.persistence.migrate import apply_migrations
 from app.persistence.postgres import build_conninfo, memory_transaction
+from qa_execution import ExecutionLease, ExecutionUnavailable
 
 SENTINEL = "MEMORY_SENTINEL_DAY40_7f29"
 SENTINEL_DAY41 = "MEMORY_SENTINEL_DAY41_91ab"
@@ -82,6 +83,18 @@ def recall_db():
         pool.close()
 
 
+@pytest.fixture(scope="module")
+def execution(recall_db):
+    try:
+        lease = ExecutionLease.open(recall_db.env)
+    except ExecutionUnavailable as exc:
+        pytest.skip(f"Redis 不可用，跳过执行链路测试: {exc.__class__.__name__}")
+    try:
+        yield lease
+    finally:
+        lease.close(recall_db.resources.pool)
+
+
 def test_recall_respects_scope_lifecycle_and_does_not_write(recall_db):
     service = MemoryService(recall_db.pool)
     tenant_a, tenant_b = uuid4(), uuid4()
@@ -131,12 +144,13 @@ def test_recall_respects_scope_lifecycle_and_does_not_write(recall_db):
         _purge(recall_db, tenant_b)
 
 
-def test_checkpoint_does_not_store_recalled_memory_and_the_next_run_recalls_again(recall_db):
+def test_checkpoint_does_not_store_recalled_memory_and_the_next_run_recalls_again(recall_db, execution):
     tenant_id, actor_id = uuid4(), uuid4()
+    execution.track(tenant_id)
     memory = _CountingMemory(MemoryService(recall_db.pool))
     context = _context(tenant_id, actor_id)
     rag = RecordingRAG()
-    service = KnowledgeQAService(rag, checkpointer=recall_db.resources.saver, memory=memory)
+    service = execution.service(rag, recall_db.resources.saver, memory=memory)
     conversation = uuid4()
     thread_id = thread_id_for(tenant_id, conversation)
     try:
@@ -168,12 +182,13 @@ def test_checkpoint_does_not_store_recalled_memory_and_the_next_run_recalls_agai
         _delete_thread(recall_db.resources, thread_id)
 
 
-def test_day41_sentinel_stays_out_of_checkpoint_history_question_and_logs(recall_db, caplog):
+def test_day41_sentinel_stays_out_of_checkpoint_history_question_and_logs(recall_db, caplog, execution):
     tenant_id, actor_id = uuid4(), uuid4()
+    execution.track(tenant_id)
     memory = MemoryService(recall_db.pool)
     context = _context(tenant_id, actor_id)
     rag = RecordingRAG()
-    service = KnowledgeQAService(rag, checkpointer=recall_db.resources.saver, memory=memory)
+    service = execution.service(rag, recall_db.resources.saver, memory=memory)
     conversation = uuid4()
     thread_id = thread_id_for(tenant_id, conversation)
     try:
@@ -203,22 +218,24 @@ def test_day41_sentinel_stays_out_of_checkpoint_history_question_and_logs(recall
 def _checkpoint_text(resources: CheckpointResources, thread_id: str, needle: str = SENTINEL) -> str:
     needle_bytes = needle.encode()
     with resources.pool.connection() as connection:
-        rows = connection.execute(
-            """
-            select checkpoint::text as checkpoint, metadata::text as metadata
-            from agent.checkpoints
-            where thread_id = %s
-            """,
-            (thread_id,),
-        ).fetchall()
-        blobs = connection.execute(
-            "select blob from agent.checkpoint_blobs where thread_id = %s",
-            (thread_id,),
-        ).fetchall()
-        writes = connection.execute(
-            "select blob from agent.checkpoint_writes where thread_id = %s",
-            (thread_id,),
-        ).fetchall()
+        with connection.transaction():
+            connection.execute("select set_config('app.tenant_id', %s, true)", (_tenant_of(thread_id),))
+            rows = connection.execute(
+                """
+                select checkpoint::text as checkpoint, metadata::text as metadata
+                from agent.checkpoints
+                where thread_id = %s
+                """,
+                (thread_id,),
+            ).fetchall()
+            blobs = connection.execute(
+                "select blob from agent.checkpoint_blobs where thread_id = %s",
+                (thread_id,),
+            ).fetchall()
+            writes = connection.execute(
+                "select blob from agent.checkpoint_writes where thread_id = %s",
+                (thread_id,),
+            ).fetchall()
     parts = [str(row["checkpoint"]) + str(row["metadata"]) for row in rows]
     for row in list(blobs) + list(writes):
         payload = row["blob"]
@@ -233,9 +250,17 @@ def _checkpoint_text(resources: CheckpointResources, thread_id: str, needle: str
 
 def _delete_thread(resources: CheckpointResources, thread_id: str) -> None:
     with resources.pool.connection() as connection:
-        connection.execute("delete from agent.checkpoint_writes where thread_id = %s", (thread_id,))
-        connection.execute("delete from agent.checkpoint_blobs where thread_id = %s", (thread_id,))
-        connection.execute("delete from agent.checkpoints where thread_id = %s", (thread_id,))
+        with connection.transaction():
+            connection.execute("select set_config('app.tenant_id', %s, true)", (_tenant_of(thread_id),))
+            connection.execute("delete from agent.checkpoint_writes where thread_id = %s", (thread_id,))
+            connection.execute("delete from agent.checkpoint_blobs where thread_id = %s", (thread_id,))
+            connection.execute("delete from agent.checkpoints where thread_id = %s", (thread_id,))
+
+
+def _tenant_of(thread_id: str) -> str:
+    """Test observation only: the thread was created by this test."""
+    _prefix, tenant, _conversation = thread_id.split(":")
+    return tenant
 
 
 def _row(recall_db, context: MemoryAccessContext, memory_id: UUID):

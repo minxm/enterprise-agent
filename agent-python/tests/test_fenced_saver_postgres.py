@@ -8,7 +8,7 @@ from psycopg.errors import NotNullViolation
 from psycopg_pool import ConnectionPool
 from app.core.config import Settings
 from app.persistence.checkpoint import CheckpointResources
-from app.persistence.fence_context import fence_scope
+from app.persistence.fence_context import fence_scope, tenant_scope
 from app.persistence.fenced_saver import FencedPostgresSaver, FencingViolation
 from app.persistence.migrate import apply_migrations
 from app.persistence.postgres import build_conninfo, reject_superuser, tenant_transaction
@@ -29,8 +29,9 @@ def test_current_fence_can_be_saved_and_read(fenced_db):
         )
         saver.put_writes(saved, [("messages", "pending")], "task-1", "tasks")
 
-    loaded = saver.get_tuple(_config(thread_id))
-    listed = list(saver.list(_config(thread_id)))
+    with tenant_scope(tenant):
+        loaded = saver.get_tuple(_config(thread_id))
+        listed = list(saver.list(_config(thread_id)))
     assert saved["configurable"]["checkpoint_id"] == "cp-current"
     assert loaded is not None
     assert loaded.checkpoint["channel_values"]["answer"] == "ok"
@@ -53,7 +54,8 @@ def test_stale_fence_cannot_put_a_checkpoint(fenced_db):
         with pytest.raises(FencingViolation):
             saver.put(_config(thread_id), checkpoint, {"source": "loop", "step": 1}, versions)
 
-    assert saver.get_tuple(_config(thread_id)) is None
+    with tenant_scope(tenant):
+        assert saver.get_tuple(_config(thread_id)) is None
     assert _counts(fenced_db, thread_id) == (0, 0, 0)
     assert store.check_fence(tenant, thread_id, 2) == 2
 
@@ -71,7 +73,8 @@ def test_stale_fence_cannot_put_writes(fenced_db):
             saver.put_writes(saved, [("messages", "late")], "task-late")
 
     assert _counts(fenced_db, thread_id) == (1, 1, 0)
-    loaded = saver.get_tuple(saved)
+    with tenant_scope(tenant):
+        loaded = saver.get_tuple(saved)
     assert loaded is not None
     assert loaded.pending_writes == []
 
@@ -90,7 +93,8 @@ def test_checkpoint_sql_failure_rolls_back_the_same_transaction(fenced_db):
     checkpoint, versions = _checkpoint("cp-after-rollback", {"payload": {"n": 2}})
     with fence_scope(tenant, thread_id, 1):
         saver.put(_config(thread_id), checkpoint, {"source": "loop", "step": 2}, versions)
-    loaded = saver.get_tuple(_config(thread_id))
+    with tenant_scope(tenant):
+        loaded = saver.get_tuple(_config(thread_id))
     assert loaded is not None
     assert loaded.checkpoint["channel_values"]["payload"] == {"n": 2}
     assert _counts(fenced_db, thread_id) == (1, 1, 0)
@@ -132,7 +136,8 @@ def test_two_savers_accept_only_the_current_fence(fenced_db):
         worker.join(10)
     assert errors == []
     assert denied == ["a"]
-    assert saver_b.get_tuple(_config(thread_id)).checkpoint["id"] == "cp-saver-b"
+    with tenant_scope(tenant):
+        assert saver_b.get_tuple(_config(thread_id)).checkpoint["id"] == "cp-saver-b"
     assert _counts(fenced_db, thread_id) == (1, 0, 0)
 
 
@@ -169,7 +174,8 @@ def test_rls_blocks_the_other_tenant_and_a_missing_guc(fenced_db):
     checkpoint, versions = _checkpoint("cp-no-context")
     with pytest.raises(FenceContextError):
         saver.put(_config(thread_a), checkpoint, {"source": "loop", "step": 1}, versions)
-    assert saver.get_tuple(_config(thread_a)) is None
+    with tenant_scope(tenant_a):
+        assert saver.get_tuple(_config(thread_a)) is None
 
 
 @pytest.fixture(scope="module")
@@ -237,11 +243,13 @@ def _begin(fenced_db):
 
 def _counts(fenced_db, thread_id: str) -> tuple[int, int, int]:
     with fenced_db.resources.pool.connection() as connection:
-        return (
-            _scalar(connection, "select count(*) from agent.checkpoints where thread_id = %s", (thread_id,)),
-            _scalar(connection, "select count(*) from agent.checkpoint_blobs where thread_id = %s", (thread_id,)),
-            _scalar(connection, "select count(*) from agent.checkpoint_writes where thread_id = %s", (thread_id,)),
-        )
+        with connection.transaction():
+            connection.execute("select set_config('app.tenant_id', %s, true)", (_tenant_of(thread_id),))
+            return (
+                _scalar(connection, "select count(*) from agent.checkpoints where thread_id = %s", (thread_id,)),
+                _scalar(connection, "select count(*) from agent.checkpoint_blobs where thread_id = %s", (thread_id,)),
+                _scalar(connection, "select count(*) from agent.checkpoint_writes where thread_id = %s", (thread_id,)),
+            )
 
 
 def _assert_guc_does_not_leak(fenced_db) -> None:
@@ -256,11 +264,17 @@ def _cleanup(fenced_db) -> None:
     threads = fenced_db.threads
     if threads and fenced_db.resources.pool is not None:
         with fenced_db.resources.pool.connection() as connection:
-            for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-                connection.execute(
-                    f"delete from agent.{table} where thread_id = any(%s)",
-                    (threads,),
-                )
+            for thread_id in threads:
+                with connection.transaction():
+                    connection.execute(
+                        "select set_config('app.tenant_id', %s, true)",
+                        (_tenant_of(thread_id),),
+                    )
+                    for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                        connection.execute(
+                            f"delete from agent.{table} where thread_id = %s",
+                            (thread_id,),
+                        )
     if fenced_db.tenants:
         with _connect(
             fenced_db.env,
@@ -306,6 +320,11 @@ def _checkpoint(checkpoint_id: str | None, values: dict | None = None) -> tuple[
         "updated_channels": list(channel_values),
     }
     return checkpoint, versions
+
+
+def _tenant_of(thread_id: str) -> str:
+    _prefix, tenant, _conversation = thread_id.split(":")
+    return tenant
 
 
 def _scalar(connection, sql: str, params=None):

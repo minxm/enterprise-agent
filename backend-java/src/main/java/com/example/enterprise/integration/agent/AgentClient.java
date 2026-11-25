@@ -5,6 +5,8 @@ import com.example.enterprise.agentgateway.HistoryMessages;
 import com.example.enterprise.common.request.RequestIds;
 import com.example.enterprise.config.AgentServiceProperties;
 import com.example.enterprise.internal.ActorTicketStore;
+import com.example.enterprise.internal.InternalKnowledgeQaTicketController;
+import com.example.enterprise.internal.KnowledgeQaTicketStore;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,16 +40,19 @@ public class AgentClient {
     private final RestClient agentStreamRestClient;
     private final AgentServiceProperties properties;
     private final ActorTicketStore tickets;
+    private final KnowledgeQaTicketStore knowledgeTickets;
 
     public AgentClient(
             @Qualifier("agentRestClient") RestClient agentRestClient,
             @Qualifier("agentStreamRestClient") RestClient agentStreamRestClient,
             AgentServiceProperties properties,
-            ActorTicketStore tickets) {
+            ActorTicketStore tickets,
+            KnowledgeQaTicketStore knowledgeTickets) {
         this.agentRestClient = agentRestClient;
         this.agentStreamRestClient = agentStreamRestClient;
         this.properties = properties;
         this.tickets = tickets;
+        this.knowledgeTickets = knowledgeTickets;
     }
 
     public AgentHealthResponse health() {
@@ -77,20 +82,20 @@ public class AgentClient {
         }
     }
 
-    public List<HistoryMessage> readKnowledgeQaHistory(UUID tenantId, UUID actorId, UUID conversationId) {
+    public List<HistoryMessage> readKnowledgeQaHistory(
+            UUID tenantId, UUID actorId, UUID conversationId, boolean allowTenantRead) {
         String token = properties.getInternalToken();
         if (token == null || token.isBlank()) {
             throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务认证未配置");
         }
+        String knowledgeTicket = knowledgeTickets.issue(
+                tenantId, actorId, conversationId, KnowledgeQaTicketStore.ACTION_HISTORY, allowTenantRead);
         try {
             return agentRestClient.get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path(properties.getKnowledgeQaHistoryPath())
-                            .queryParam("tenant_id", tenantId)
-                            .queryParam("actor_id", actorId)
-                            .build(conversationId))
+                    .uri(properties.getKnowledgeQaHistoryPath(), conversationId)
                     .header(RequestIds.HEADER, RequestIds.current().orElseGet(RequestIds::newId))
                     .header(INTERNAL_TOKEN_HEADER, token)
+                    .header(InternalKnowledgeQaTicketController.TICKET_HEADER, knowledgeTicket)
                     .exchange((request, response) -> {
                         int status = response.getStatusCode().value();
                         if (status == 404) {
@@ -118,6 +123,8 @@ public class AgentClient {
                 throw agentFailure;
             }
             throw mapTransportFailure(exception);
+        } finally {
+            knowledgeTickets.revoke(knowledgeTicket);
         }
     }
 
@@ -136,9 +143,16 @@ public class AgentClient {
             throw new AgentServiceException(HttpStatus.SERVICE_UNAVAILABLE, "Agent 服务认证未配置");
         }
         String actorTicket = tickets.issue(tenantId, actorId);
-        KnowledgeQaPythonRequest body = new KnowledgeQaPythonRequest(
-                tenantId, actorId, conversationId, question, topK, retrievalStrategy, actorTicket, allowTenantRead);
+        String knowledgeTicket = null;
         try {
+            knowledgeTicket = knowledgeTickets.issue(
+                    tenantId,
+                    actorId,
+                    conversationId,
+                    KnowledgeQaTicketStore.ACTION_STREAM,
+                    allowTenantRead);
+            KnowledgeQaPythonRequest body = new KnowledgeQaPythonRequest(
+                    conversationId, question, topK, retrievalStrategy, actorTicket, knowledgeTicket);
             agentStreamRestClient.post()
                     .uri(properties.getKnowledgeQaPath())
                     .header(RequestIds.HEADER, requestId)
@@ -162,7 +176,11 @@ public class AgentClient {
             }
             throw mapTransportFailure(exception);
         } finally {
-            tickets.revoke(actorTicket);
+            try {
+                tickets.revoke(actorTicket);
+            } finally {
+                knowledgeTickets.revoke(knowledgeTicket);
+            }
         }
     }
 

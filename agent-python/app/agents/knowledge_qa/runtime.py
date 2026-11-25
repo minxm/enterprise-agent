@@ -23,11 +23,18 @@ from app.models.chat import ChatClient
 
 
 class KnowledgeQaRuntime:
-    def __init__(self, service: KnowledgeQAService, closers: list[object]) -> None:
+    def __init__(self, service: KnowledgeQAService, closers: list[object], grants: object | None = None) -> None:
         self.service = service
+        self.grants = grants
         self._closers = closers
 
     def close(self) -> None:
+        close_lease = getattr(self.service, "close", None)
+        if close_lease is not None:
+            try:
+                close_lease()
+            except Exception:
+                pass
         for closer in self._closers:
             close = getattr(closer, "close", None)
             if close is None:
@@ -38,7 +45,15 @@ class KnowledgeQaRuntime:
                 continue
 
 
-def build_knowledge_qa_runtime(settings: Settings, pool: object, checkpointer: object) -> KnowledgeQaRuntime:
+def build_knowledge_qa_runtime(
+    settings: Settings,
+    pool: object,
+    checkpointer: object,
+    *,
+    thread_lock: object | None = None,
+    fence_store: object | None = None,
+    lease_loop: object | None = None,
+) -> KnowledgeQaRuntime:
     embedding = EmbeddingClient.from_settings(settings)
     chat = ChatClient.from_settings(settings)
     closers: list[object] = [embedding, chat]
@@ -69,6 +84,7 @@ def build_knowledge_qa_runtime(settings: Settings, pool: object, checkpointer: o
         default_top_k=settings.rag_retrieval_top_k,
     )
     contract_tool = None
+    grants = None
     if settings.java_base_url and settings.agent_internal_token:
         backend = JavaBackendClient(
             settings.java_base_url,
@@ -76,6 +92,7 @@ def build_knowledge_qa_runtime(settings: Settings, pool: object, checkpointer: o
             timeout=float(settings.java_timeout_seconds),
         )
         closers.append(backend)
+        grants = backend
         contract_tool = ContractQueryTool(backend)
     return KnowledgeQaRuntime(
         KnowledgeQAService(
@@ -83,6 +100,10 @@ def build_knowledge_qa_runtime(settings: Settings, pool: object, checkpointer: o
             checkpointer=checkpointer,
             contract_tool=contract_tool,
             memory=MemoryService(pool),
+            thread_lock=thread_lock,
+            fence_store=fence_store,
+            lease_loop=lease_loop,
         ),
         closers,
+        grants,
     )

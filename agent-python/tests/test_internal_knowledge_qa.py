@@ -6,6 +6,7 @@ The model is scripted. Authentication uses a test token, not a production secret
 from __future__ import annotations
 
 import json
+import secrets
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -13,12 +14,14 @@ from fastapi.testclient import TestClient
 
 from app.agents.knowledge_qa.service import KnowledgeQAService
 from app.agents.knowledge_qa.threads import thread_id_for
-from app.api.routes.internal_knowledge_qa import router
+from app.api.routes.internal_knowledge_qa import ACTION_HISTORY, ACTION_STREAM, router
+from app.clients.java_backend.client import JavaBackendError, KnowledgeQaGrant
 from app.core.config import settings
 from app.core.errors import install_exception_handlers
 from app.core.request_middleware import RequestIdMiddleware
 from app.knowledge.prompts import INSUFFICIENT_KNOWLEDGE
 from app.knowledge.rag import RAGAnswer, RAGSource
+from lease_fakes import FakeThreadLock
 from langgraph.checkpoint.memory import MemorySaver
 
 TOKEN = "test-internal-token"
@@ -88,7 +91,7 @@ def test_blank_server_token_and_unready_service_are_rejected(monkeypatch):
     assert TOKEN not in unready.text
 
 
-def test_tenant_read_grant_comes_from_the_gateway_body_and_cannot_be_forged(monkeypatch):
+def test_tenant_read_grant_comes_only_from_the_ticket(monkeypatch):
     monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
     seen: list[bool] = []
 
@@ -115,7 +118,7 @@ def test_tenant_read_grant_comes_from_the_gateway_body_and_cannot_be_forged(monk
             "POST",
             "/internal/v1/knowledge-qa/stream",
             headers=_headers("req-read"),
-            json={**_body(), "allow_tenant_read": True},
+            json=_body(allow=True),
         ) as response:
             assert response.status_code == 200
             raw = b"".join(response.iter_bytes()).decode("utf-8")
@@ -163,7 +166,8 @@ def test_authenticated_stream_uses_gateway_identity_and_rejects_thread_id(monkey
 def test_other_actor_is_forbidden_and_a_busy_thread_does_not_run_again(monkeypatch):
     monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
     rag = ScriptedRAG([_answer("仅本人可见"), _answer("不应执行")])
-    service = KnowledgeQAService(rag, checkpointer=MemorySaver())
+    lock = FakeThreadLock()
+    service = KnowledgeQAService(rag, checkpointer=MemorySaver(), thread_lock=lock)
     conversation = uuid4()
     with TestClient(_app(service)) as client:
         with client.stream(
@@ -181,8 +185,9 @@ def test_other_actor_is_forbidden_and_a_busy_thread_does_not_run_again(monkeypat
             json=_body(conversation, actor=OTHER_ACTOR),
         ) as second:
             second_raw = b"".join(second.iter_bytes()).decode("utf-8")
-        lock = service._locks.lock_for(thread_id_for(TENANT, conversation))
-        assert lock.acquire(blocking=False)
+        thread_id = thread_id_for(TENANT, conversation)
+        assert lock.held == {}
+        lock.hold(TENANT, thread_id)
         try:
             with client.stream(
                 "POST",
@@ -192,7 +197,8 @@ def test_other_actor_is_forbidden_and_a_busy_thread_does_not_run_again(monkeypat
             ) as busy:
                 busy_raw = b"".join(busy.iter_bytes()).decode("utf-8")
         finally:
-            lock.release()
+            lock.release_hold(TENANT, thread_id)
+            service.close()
 
     assert _parse_sse(first_raw)[-1][0] == "run_completed"
     denied = _parse_sse(second_raw)
@@ -202,8 +208,7 @@ def test_other_actor_is_forbidden_and_a_busy_thread_does_not_run_again(monkeypat
     busy_events = _parse_sse(busy_raw)
     assert busy_events[-1][1]["error_code"] == "thread_busy"
     assert rag.calls == [(TENANT, "付款由谁审批？", "vector")]
-    assert lock.acquire(blocking=False)
-    lock.release()
+    assert lock.held == {}
 
 
 def test_failure_event_hides_secrets_and_other_tenant_is_a_different_thread(monkeypatch):
@@ -316,18 +321,16 @@ def test_history_route_projects_messages_and_rejects_thread_id(monkeypatch):
                 b"".join(response.iter_bytes())
         rejected = client.get(
             f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
-            headers=_headers("req-history"),
-            params={"tenant_id": str(TENANT), "actor_id": str(ACTOR), "thread_id": thread_id_for(TENANT, conversation)},
+            headers=_history_headers("req-history", conversation),
+            params={"thread_id": thread_id_for(TENANT, conversation)},
         )
         denied = client.get(
             f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
-            headers=_headers("req-history"),
-            params={"tenant_id": str(TENANT), "actor_id": str(OTHER_ACTOR)},
+            headers=_history_headers("req-history", conversation, actor=OTHER_ACTOR),
         )
         allowed = client.get(
             f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
-            headers=_headers("req-history"),
-            params={"tenant_id": str(TENANT), "actor_id": str(ACTOR)},
+            headers=_history_headers("req-history", conversation),
         )
     assert rejected.status_code == 422
     assert "thread_id" not in rejected.text
@@ -352,17 +355,220 @@ def test_history_route_projects_messages_and_rejects_thread_id(monkeypatch):
     assert thread_id_for(TENANT, conversation) not in allowed.text
 
 
+def test_redeem_failure_does_not_enter_tenant_scope(monkeypatch):
+    monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
+    entered: list[object] = []
+
+    def spy(tenant):
+        entered.append(tenant)
+        raise AssertionError("tenant_scope")
+
+    monkeypatch.setattr("app.agents.knowledge_qa.service.tenant_scope", spy)
+    rag = ScriptedRAG([_answer("不应执行")])
+    app = _app(KnowledgeQAService(rag, checkpointer=MemorySaver()))
+
+    class Down:
+        def redeem_knowledge_qa_ticket(self, ticket: str) -> KnowledgeQaGrant:
+            del ticket
+            raise JavaBackendError("unavailable", "身份授权暂时不可用")
+
+    app.state.knowledge_qa_grants = Down()
+    conversation = uuid4()
+    ticket = _book.issue(conversation)
+    with TestClient(app) as client:
+        missing = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-missing"),
+            json={"conversation_id": str(conversation), "question": "付款由谁审批？"},
+        )
+        failed = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-down"),
+            json={
+                "conversation_id": str(conversation),
+                "question": "付款由谁审批？",
+                "knowledge_qa_ticket": ticket,
+            },
+        )
+    assert missing.status_code == 422
+    assert failed.status_code == 503
+    assert entered == []
+    assert rag.calls == []
+
+
+def test_mismatched_action_or_conversation_is_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
+    entered: list[object] = []
+    monkeypatch.setattr(
+        "app.agents.knowledge_qa.service.tenant_scope",
+        lambda tenant: entered.append(tenant),
+    )
+    rag = ScriptedRAG([_answer("不应执行")])
+    app = _app(KnowledgeQAService(rag, checkpointer=MemorySaver()))
+    conversation = uuid4()
+    other = uuid4()
+    history_ticket = _book.issue(conversation, action=ACTION_HISTORY)
+    stream_ticket = _book.issue(other)
+    with TestClient(app) as client:
+        wrong_action = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-action"),
+            json={
+                "conversation_id": str(conversation),
+                "question": "付款由谁审批？",
+                "knowledge_qa_ticket": history_ticket,
+            },
+        )
+        wrong_conversation = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-conversation"),
+            json={
+                "conversation_id": str(conversation),
+                "question": "付款由谁审批？",
+                "knowledge_qa_ticket": stream_ticket,
+            },
+        )
+    assert wrong_action.status_code == 401
+    assert wrong_conversation.status_code == 401
+    assert entered == []
+    assert rag.calls == []
+    try:
+        _book.redeem_knowledge_qa_ticket(history_ticket)
+    except JavaBackendError as exc:
+        assert exc.code == "unauthorized"
+    else:
+        raise AssertionError("consumed ticket")
+
+
+def test_forged_identity_fields_do_not_override_the_ticket(monkeypatch):
+    monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
+    rag = ScriptedRAG([_answer("部门负责人审批。")])
+    app = _app(KnowledgeQAService(rag, checkpointer=MemorySaver()))
+    conversation = uuid4()
+    with TestClient(app) as client:
+        forged_tenant = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-tenant"),
+            json={**_body(conversation), "tenant_id": str(OTHER_TENANT)},
+        )
+        forged_actor = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-actor"),
+            json={**_body(conversation), "actor_id": str(OTHER_ACTOR)},
+        )
+        forged_read = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-read"),
+            json={**_body(conversation, allow=False), "allow_tenant_read": True},
+        )
+        with client.stream(
+            "POST",
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-real"),
+            json=_body(conversation, allow=False),
+        ) as response:
+            assert response.status_code == 200
+            b"".join(response.iter_bytes())
+    assert forged_tenant.status_code == 422
+    assert forged_actor.status_code == 422
+    assert forged_read.status_code == 422
+    assert rag.calls == [(TENANT, "付款由谁审批？", "vector")]
+
+
+def test_ticket_replay_and_history_without_a_ticket_are_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "agent_internal_token", TOKEN)
+    rag = ScriptedRAG([_answer("第一轮"), _answer("不应执行")])
+    app = _app(KnowledgeQAService(rag, checkpointer=MemorySaver()))
+    conversation = uuid4()
+    body = None
+    with TestClient(app) as client:
+        body = _body(conversation, question="第一题")
+        with client.stream(
+            "POST",
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-once"),
+            json=body,
+        ) as first:
+            assert first.status_code == 200
+            b"".join(first.iter_bytes())
+        replay = client.post(
+            "/internal/v1/knowledge-qa/stream",
+            headers=_headers("req-replay"),
+            json=body,
+        )
+        missing_history = client.get(
+            f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
+            headers=_headers("req-history-missing"),
+        )
+        query_history = client.get(
+            f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
+            headers=_history_headers("req-history-query", conversation),
+            params={"tenant_id": str(OTHER_TENANT), "actor_id": str(OTHER_ACTOR)},
+        )
+        allowed = client.get(
+            f"/internal/v1/knowledge-qa/conversations/{conversation}/messages",
+            headers=_history_headers("req-history-ok", conversation),
+        )
+    assert replay.status_code == 401
+    assert missing_history.status_code == 401
+    assert query_history.status_code == 422
+    assert allowed.status_code == 200
+    assert allowed.json()["messages"][0]["content"] == "第一题"
+    assert rag.calls == [(TENANT, "第一题", "vector")]
+
+
 def _app(service: KnowledgeQAService) -> FastAPI:
+    global _book
     app = FastAPI()
     install_exception_handlers(app)
     app.add_middleware(RequestIdMiddleware)
     app.include_router(router, prefix="/internal/v1")
     app.state.knowledge_qa = service
+    _book = GrantBook()
+    app.state.knowledge_qa_grants = _book
     return app
+
+
+class GrantBook:
+    def __init__(self) -> None:
+        self.rows: dict[str, KnowledgeQaGrant] = {}
+
+    def issue(
+        self,
+        conversation: UUID,
+        *,
+        tenant: UUID = TENANT,
+        actor: UUID = ACTOR,
+        action: str = ACTION_STREAM,
+        allow: bool = False,
+    ) -> str:
+        ticket = secrets.token_urlsafe(32)
+        self.rows[ticket] = KnowledgeQaGrant(tenant, actor, conversation, action, allow)
+        return ticket
+
+    def redeem_knowledge_qa_ticket(self, ticket: str) -> KnowledgeQaGrant:
+        grant = self.rows.pop(ticket, None)
+        if grant is None:
+            raise JavaBackendError("unauthorized", "未认证")
+        return grant
+
+
+_book: GrantBook = GrantBook()
 
 
 def _headers(request_id: str) -> dict[str, str]:
     return {"X-Agent-Token": TOKEN, "X-Request-ID": request_id}
+
+
+def _history_headers(
+    request_id: str,
+    conversation: UUID,
+    *,
+    tenant: UUID = TENANT,
+    actor: UUID = ACTOR,
+) -> dict[str, str]:
+    ticket = _book.issue(conversation, tenant=tenant, actor=actor, action=ACTION_HISTORY)
+    return {**_headers(request_id), "X-Knowledge-Qa-Ticket": ticket}
 
 
 def _body(
@@ -371,12 +577,14 @@ def _body(
     tenant: UUID = TENANT,
     actor: UUID = ACTOR,
     question: str = "付款由谁审批？",
+    action: str = ACTION_STREAM,
+    allow: bool = False,
 ) -> dict[str, str]:
+    conversation = conversation or uuid4()
     return {
-        "tenant_id": str(tenant),
-        "actor_id": str(actor),
-        "conversation_id": str(conversation or uuid4()),
+        "conversation_id": str(conversation),
         "question": question,
+        "knowledge_qa_ticket": _book.issue(conversation, tenant=tenant, actor=actor, action=action, allow=allow),
     }
 
 

@@ -10,6 +10,7 @@ import com.example.enterprise.config.RestClientConfig;
 import com.example.enterprise.internal.ActorTicketException;
 import com.example.enterprise.internal.ActorTicketStore;
 import com.example.enterprise.internal.ActorTicketStores;
+import com.example.enterprise.internal.KnowledgeQaTicketStores;
 import jakarta.servlet.ServletOutputStream;
 import jakarta.servlet.WriteListener;
 import java.io.ByteArrayOutputStream;
@@ -144,7 +145,7 @@ class AgentClientTest {
         MDC.put(RequestIds.MDC_KEY, "trace-history");
         try {
             var messages = client(server.url("/").toString(), Duration.ofSeconds(1), Duration.ofSeconds(1), "gateway-test-token")
-                    .readKnowledgeQaHistory(tenantId, actorId, conversationId);
+                    .readKnowledgeQaHistory(tenantId, actorId, conversationId, false);
             assertThat(messages).hasSize(1);
             assertThat(messages.getFirst().content()).isEqualTo("部门负责人审批");
             assertThat(messages.getFirst().sourceIds()).containsExactly("chunk-1");
@@ -157,8 +158,9 @@ class AgentClientTest {
         RecordedRequest request = server.takeRequest();
         assertThat(request.getMethod()).isEqualTo("GET");
         assertThat(request.getPath()).contains("/internal/v1/knowledge-qa/conversations/" + conversationId + "/messages");
-        assertThat(request.getPath()).contains("tenant_id=" + tenantId);
-        assertThat(request.getPath()).contains("actor_id=" + actorId);
+        assertThat(request.getPath()).doesNotContain("tenant_id");
+        assertThat(request.getPath()).doesNotContain("actor_id");
+        assertThat(request.getHeader("X-Knowledge-Qa-Ticket")).isNotBlank();
         assertThat(request.getHeader("X-Agent-Token")).isEqualTo("gateway-test-token");
         assertThat(request.getHeader(RequestIds.HEADER)).isEqualTo("trace-history");
         assertThat(request.getPath()).doesNotContain("thread_id");
@@ -175,13 +177,13 @@ class AgentClientTest {
         server.enqueue(new MockResponse().setResponseCode(500).setBody("blob secret"));
         AgentClient client = client(server.url("/").toString(), Duration.ofSeconds(1), Duration.ofSeconds(1), "gateway-test-token");
 
-        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId))
+        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId, false))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("会话不存在");
-        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId))
+        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId, false))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("同一个会话正在执行，请等待本次完成后再继续。");
-        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId))
+        assertThatThrownBy(() -> client.readKnowledgeQaHistory(tenantId, actorId, conversationId, false))
                 .isInstanceOf(AgentServiceException.class)
                 .hasMessage("Agent 服务返回异常状态")
                 .hasMessageNotContaining("secret")
@@ -222,12 +224,15 @@ class AgentClientTest {
         assertThat(request.getHeader(RequestIds.HEADER)).isEqualTo("trace-stream");
         assertThat(request.getHeader("Authorization")).isNull();
         String body = request.getBody().readUtf8();
-        assertThat(body).contains("\"tenant_id\":\"" + tenantId + "\"");
-        assertThat(body).contains("\"actor_id\":\"" + actorId + "\"");
+        assertThat(body).doesNotContain("\"tenant_id\"");
+        assertThat(body).doesNotContain("\"actor_id\"");
+        assertThat(body).doesNotContain(tenantId.toString());
+        assertThat(body).doesNotContain(actorId.toString());
         assertThat(body).contains("\"conversation_id\":\"" + conversationId + "\"");
         assertThat(body).contains("付款由谁审批？");
         assertThat(body).contains("\"actor_ticket\":");
-        assertThat(body).contains("\"allow_tenant_read\":false");
+        assertThat(body).contains("\"knowledge_qa_ticket\":");
+        assertThat(body).doesNotContain("allow_tenant_read");
         assertThat(body).doesNotContain("allow_tenant_write");
         assertThat(body).doesNotContain("thread_id");
         assertThat(request.getPath()).isEqualTo("/internal/v1/knowledge-qa/stream");
@@ -409,8 +414,10 @@ class AgentClientTest {
             String request = rawRequest.get();
             assertThat(request).contains("X-Agent-Token: gateway-test-token");
             assertThat(request).contains("X-Request-ID: trace-live");
-            assertThat(request).contains(tenantId.toString());
-            assertThat(request).contains(actorId.toString());
+            assertThat(request).contains(conversationId.toString());
+            assertThat(request).contains("knowledge_qa_ticket");
+            assertThat(request).doesNotContain(tenantId.toString());
+            assertThat(request).doesNotContain(actorId.toString());
             assertThat(request).doesNotContain("thread_id");
             assertThat(request.toLowerCase()).doesNotContain("authorization:");
         }
@@ -434,7 +441,8 @@ class AgentClientTest {
         properties.setInternalToken(token);
 
         RestClient restClient = RestClientConfig.create(baseUrl, connectTimeout, readTimeout);
-        return new AgentClient(restClient, restClient, properties, ActorTicketStores.memory());
+        return new AgentClient(
+                restClient, restClient, properties, ActorTicketStores.memory(), KnowledgeQaTicketStores.memory());
     }
 
     private AgentClient streamClient(String baseUrl, String token) {
@@ -452,7 +460,7 @@ class AgentClientTest {
         properties.setInternalToken(token);
         RestClient health = RestClientConfig.create(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(1));
         RestClient stream = RestClientConfig.create(baseUrl, Duration.ofSeconds(1), Duration.ofSeconds(5));
-        return new AgentClient(health, stream, properties, tickets);
+        return new AgentClient(health, stream, properties, tickets, KnowledgeQaTicketStores.memory());
     }
 
     private static void serveOneChunkThenClose(ServerSocket socket) {

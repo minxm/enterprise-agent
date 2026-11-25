@@ -19,6 +19,7 @@ from app.agents.knowledge_qa.nodes import UNSUPPORTED_ANSWER
 from app.agents.knowledge_qa.service import KnowledgeQAService
 from app.agents.knowledge_qa.sse import iter_sse_bytes, open_knowledge_qa_sse
 from app.agents.knowledge_qa.threads import thread_id_for
+from lease_fakes import FakeThreadLock
 from app.core.request_context import reset_request_id, set_request_id
 from app.knowledge.prompts import INSUFFICIENT_KNOWLEDGE
 from app.knowledge.rag import RAGAnswer, RAGSource
@@ -265,7 +266,8 @@ def test_same_thread_stays_busy_and_the_lock_is_released():
     started = threading.Event()
     release = threading.Event()
     rag = _BlockingRAG(started, release, [_answer("第一轮")])
-    service = KnowledgeQAService(rag, checkpointer=MemorySaver())
+    lock = FakeThreadLock()
+    service = KnowledgeQAService(rag, checkpointer=MemorySaver(), thread_lock=lock)
     conversation = uuid4()
 
     def run_first() -> None:
@@ -279,20 +281,20 @@ def test_same_thread_stays_busy_and_the_lock_is_released():
     finally:
         release.set()
     worker.join(5)
+    service.close()
 
     assert [name for name, _data in busy] == ["run_failed"]
     assert busy[0][1]["error_code"] == "thread_busy"
     assert rag.calls == ["第一题"]
-    lock = service._locks.lock_for(thread_id_for(TENANT, conversation))
-    assert lock.acquire(blocking=False)
-    lock.release()
+    assert lock.held == {}
 
 
 def test_disconnect_and_failure_release_the_thread_lock():
     started = threading.Event()
     release = threading.Event()
     rag = _BlockingRAG(started, release, [_answer("中断后的回答")])
-    service = KnowledgeQAService(rag, checkpointer=MemorySaver())
+    lock = FakeThreadLock()
+    service = KnowledgeQAService(rag, checkpointer=MemorySaver(), thread_lock=lock)
     conversation = uuid4()
 
     async def consume() -> None:
@@ -319,17 +321,19 @@ def test_disconnect_and_failure_release_the_thread_lock():
             await task
 
     asyncio.run(main())
-    lock = service._locks.lock_for(thread_id_for(TENANT, conversation))
-    assert lock.acquire(blocking=False)
-    lock.release()
+    assert lock.held == {}
+    service.close()
 
     failed = ScriptedRAG([RuntimeError("password=secret")])
-    failed_service = KnowledgeQAService(failed, checkpointer=MemorySaver())
+    failed_lock = FakeThreadLock()
+    failed_service = KnowledgeQAService(failed, checkpointer=MemorySaver(), thread_lock=failed_lock)
     failed_conversation = uuid4()
-    list(failed_service.stream_events(TENANT, "会失败", conversation_id=failed_conversation))
-    failed_lock = failed_service._locks.lock_for(thread_id_for(TENANT, failed_conversation))
-    assert failed_lock.acquire(blocking=False)
-    failed_lock.release()
+    try:
+        list(failed_service.stream_events(TENANT, "会失败", conversation_id=failed_conversation))
+    finally:
+        failed_service.close()
+    assert failed_lock.held == {}
+    assert failed_lock.releases
 
 
 def test_heartbeat_is_sent_while_the_sync_graph_is_blocked():

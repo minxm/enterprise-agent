@@ -68,7 +68,8 @@ public class KnowledgeQaController {
         AuthenticatedUser user = currentUser();
         UUID tenantId = TenantContext.require();
         conversations.requireOwned(tenantId, user.userId(), conversationId);
-        List<HistoryMessage> messages = agentClient.readKnowledgeQaHistory(tenantId, user.userId(), conversationId);
+        List<HistoryMessage> messages = agentClient.readKnowledgeQaHistory(
+                tenantId, user.userId(), conversationId, allowTenantRead(user.userId()));
         return ApiResponse.success(new HistoryMessages(messages));
     }
 
